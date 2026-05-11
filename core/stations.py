@@ -171,5 +171,5 @@ def station_gdf_catchment_coverage(
         pts = pts.to_crs(stations_gdf.crs)
     station_geoms = [pt.buffer(catchment_radius) for pt in stations_gdf.geometry]
     all_catchments = unary_union(station_geoms)
-    covered = pts.geometry.apply(lambda pt: all_catchments.contains(pt))
+    covered = pts.geometry.within(all_catchments)
     return covered.sum() / len(pts) * 100 if len(pts) > 0 else 0.0

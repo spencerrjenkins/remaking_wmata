@@ -53,25 +53,36 @@ def population_density_kde(
     block polygons weighted by population.
     """
     rng = np.random.default_rng(random_state)
-    sample_points = []
 
-    for _, row in blocks_gdf.iterrows():
-        pop = int(row["POP20"])
-        geom = row.geometry
-        if pop <= 0 or geom.is_empty:
-            continue
-        n_samples = max(1, int(pop * n_samples_per_person))
-        minx, miny, maxx, maxy = geom.bounds
-        count = attempts = 0
-        while count < n_samples and attempts < n_samples * 10:
-            x, y = rng.uniform(minx, maxx), rng.uniform(miny, maxy)
-            if geom.contains(Point(x, y)):
-                sample_points.append([x, y])
-                count += 1
-            attempts += 1
+    pops = pd.to_numeric(blocks_gdf["POP20"], errors="coerce").fillna(0).values
+    valid_mask = pops > 0
+    valid_gdf = blocks_gdf[valid_mask]
+    valid_pops = pops[valid_mask]
+
+    if len(valid_gdf) == 0:
+        kde = KernelDensity(bandwidth=bandwidth, kernel="gaussian")
+        kde.fit(np.zeros((1, 2)))
+        return kde
+
+    n_samples = np.maximum(1, (valid_pops * n_samples_per_person).astype(int))
+    centroids = valid_gdf.geometry.centroid
+    xs = centroids.x.values
+    ys = centroids.y.values
+    areas = valid_gdf.geometry.area.values
+    # Jitter radius: ~1/3 of the block's equivalent-circle radius keeps
+    # samples plausibly inside the block without per-point containment tests.
+    radii = np.sqrt(np.maximum(areas, 0.0) / np.pi) / 3.0
+
+    rep_xs = np.repeat(xs, n_samples)
+    rep_ys = np.repeat(ys, n_samples)
+    rep_radii = np.repeat(radii, n_samples)
+
+    jitter_x = rng.normal(0.0, np.maximum(rep_radii, 1.0))
+    jitter_y = rng.normal(0.0, np.maximum(rep_radii, 1.0))
+    sample_points = np.column_stack([rep_xs + jitter_x, rep_ys + jitter_y])
 
     kde = KernelDensity(bandwidth=bandwidth, kernel="gaussian")
-    kde.fit(np.array(sample_points))
+    kde.fit(sample_points)
     return kde
 
 
@@ -165,8 +176,13 @@ def estimate_population_in_catchments(
     Estimate total population within catchment circles around *points_gdf*
     by integrating the fitted *kde* over a grid inside each circle.
     """
-    total = 0.0
+    if points_gdf.empty:
+        return 0.0
+
     area_per_point = (2 * catchment_radius / grid_resolution) ** 2
+    all_coords = []
+    slice_sizes = []
+
     for pt in points_gdf.geometry:
         x0, y0 = pt.x, pt.y
         x = np.linspace(x0 - catchment_radius, x0 + catchment_radius, grid_resolution)
@@ -174,8 +190,18 @@ def estimate_population_in_catchments(
         xx, yy = np.meshgrid(x, y)
         coords = np.vstack([xx.ravel(), yy.ravel()]).T
         mask = np.hypot(coords[:, 0] - x0, coords[:, 1] - y0) <= catchment_radius
-        if not mask.any():
-            continue
-        density = np.exp(kde.score_samples(coords[mask]))
-        total += density.sum() * area_per_point
+        masked = coords[mask]
+        all_coords.append(masked)
+        slice_sizes.append(len(masked))
+
+    if not all_coords or sum(slice_sizes) == 0:
+        return 0.0
+
+    # Single batched KDE call instead of one call per station.
+    densities = np.exp(kde.score_samples(np.vstack(all_coords)))
+    total = 0.0
+    idx = 0
+    for n in slice_sizes:
+        total += densities[idx : idx + n].sum() * area_per_point
+        idx += n
     return total

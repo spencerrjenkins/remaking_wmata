@@ -105,23 +105,25 @@ ALL_STAGES = [
     "cost",
     "ridership",
     "evaluate",
+    "evaluate_extended",
 ]
 
 STAGE_DEPS: dict[str, list[str]] = {
-    "region":         [],
-    "transit_points": [],
-    "row_snap":       [],
-    "lodes":          ["region"],
-    "graph_points":   ["region", "transit_points"],
-    "network":        ["graph_points"],
-    "gnn_scoring":    ["network"],
-    "naive":          ["gnn_scoring"],
-    "iterative":      ["gnn_scoring"],
-    "aco":            ["gnn_scoring", "lodes"],
-    "genetic":        ["gnn_scoring"],
-    "cost":           ["naive", "iterative", "aco", "genetic", "row_snap"],
-    "ridership":      ["cost", "lodes"],
-    "evaluate":       ["ridership"],
+    "region":            [],
+    "transit_points":    [],
+    "row_snap":          [],
+    "lodes":             ["region"],
+    "graph_points":      ["region", "transit_points"],
+    "network":           ["graph_points"],
+    "gnn_scoring":       ["network"],
+    "naive":             ["gnn_scoring"],
+    "iterative":         ["gnn_scoring"],
+    "aco":               ["gnn_scoring", "lodes"],
+    "genetic":           ["gnn_scoring"],
+    "cost":              ["naive", "iterative", "aco", "genetic", "row_snap"],
+    "ridership":         ["cost", "lodes"],
+    "evaluate":          ["ridership"],
+    "evaluate_extended": ["ridership"],
 }
 
 log = logging.getLogger(__name__)
@@ -878,6 +880,211 @@ def stage_evaluate(
 
 
 # ---------------------------------------------------------------------------
+# Shared print helper
+# ---------------------------------------------------------------------------
+
+def _print_table(title: str, headers: list[str], rows: list[list[str]]) -> None:
+    """Print a fixed-width ASCII table with a title."""
+    if not rows:
+        log.warning("evaluate_extended: no rows for table '%s'", title)
+        return
+    col_widths = [
+        max(len(h), max(len(r[i]) for r in rows))
+        for i, h in enumerate(headers)
+    ]
+    fmt = "  ".join(f"{{:<{w}}}" for w in col_widths)
+    sep = "  ".join("-" * w for w in col_widths)
+    print()
+    print(f"── {title} ──")
+    print(fmt.format(*headers))
+    print(sep)
+    for row in rows:
+        print(fmt.format(*row))
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Extended evaluation stage
+# ---------------------------------------------------------------------------
+
+def stage_evaluate_extended(
+    cfg: PipelineConfig,
+    county_shapes: gpd.GeoDataFrame,
+    neighborhoods: gpd.GeoDataFrame,
+) -> None:
+    """
+    Extended quantitative evaluation of all generated networks vs. WMATA.
+
+    Produces two tables beyond the basic stage_evaluate output:
+
+    Table 1 — Equity & Population Coverage
+        pop_gini       Gini coefficient of served population across stations.
+                       Lower = more equitable distribution of transit access.
+        cov_250m%      % of regional population within 250 m of any station
+                       (conservative, ~3-min walk).
+        cov_500m%      % within 500 m (the paper's standard catchment).
+        cov_1km%       % within 1 000 m (~12-min walk, generous upper bound).
+        high_need_cov% % of top-quartile-density census blocks covered at 500 m.
+                       Directly measures whether the network serves the areas
+                       that need transit most.
+
+    Table 2 — Service Efficiency & Transfer Burden
+        track_km       Total service-track length in kilometres.
+        pop_per_km     Thousands of people served per km of track — a cost-
+                       efficiency proxy linking coverage to construction spend.
+        mean_xfers     Mean minimum line-changes needed for a station-to-station
+                       trip (generated networks only; requires line structure).
+        0xfer%         % of station pairs reachable on a single line.
+        1xfer%         % requiring exactly one transfer.
+        2+xfer%        % requiring two or more transfers (or unreachable).
+
+    Run with:
+        python pipeline.py --stages evaluate_extended
+    or append to a full run:
+        python pipeline.py --stages cost ridership evaluate evaluate_extended
+    """
+    from core.metrics import (
+        station_population_gini,
+        population_coverage_at_radii,
+        high_need_coverage,
+        service_efficiency,
+        total_track_km_from_geojson,
+        track_km_from_geodataframe,
+        transfer_burden,
+    )
+    import math
+
+    def _fmt(v, spec=""):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "N/A"
+        return format(v, spec)
+
+    log.info("evaluate_extended: loading census blocks and network pickles …")
+    _, positions, _ = _load_network_pickles()
+
+    blocks = load_geojson(str(DATA_DIR / "complete_region_df.geojson")).to_crs(epsg=3857)
+    if "transit_potential" not in blocks.columns:
+        from core.spatial import compute_transit_potential
+        blocks = compute_transit_potential(blocks)
+
+    wmata_stations = load_geojson(
+        str(DATA_DIR / "real_transit" / "wmata" / "Metro_Stations_Regional.geojson")
+    ).to_crs(epsg=3857)
+
+    wmata_lines_path = DATA_DIR / "real_transit" / "wmata" / "Metro_Lines_Regional.geojson"
+    wmata_track_km = (
+        track_km_from_geodataframe(load_geojson(str(wmata_lines_path)).to_crs(epsg=3857))
+        if wmata_lines_path.exists() else float("nan")
+    )
+
+    # Collect per-variant data
+    variant_order = ["naive", "iterative", "aco", "genetic", "wmata"]
+    variant_paths = {
+        "naive":     OUTPUT_DIR / "lines_naive.geojson",
+        "iterative": OUTPUT_DIR / "lines_iterative.geojson",
+        "aco":       OUTPUT_DIR / "lines_aco.geojson",
+        "genetic":   OUTPUT_DIR / "lines_genetic.geojson",
+    }
+
+    station_gdfs: dict[str, gpd.GeoDataFrame] = {}
+    track_kms: dict[str, float] = {"wmata": wmata_track_km}
+    line_data: dict[str, tuple] = {}  # name → (lines, groups, status)
+
+    for name, path in variant_paths.items():
+        if path.exists():
+            station_gdfs[name] = _station_gdf_from_lines(str(path), positions)
+            track_kms[name] = total_track_km_from_geojson(path)
+            ls, st, gr, _ = load_lines_from_geojson(str(path))
+            line_data[name] = (ls, gr, st)
+        else:
+            log.warning("evaluate_extended: %s not found, skipping", path.name)
+
+    station_gdfs["wmata"] = wmata_stations
+
+    active = [n for n in variant_order if n in station_gdfs]
+
+    # ── Table 1: Equity & Population Coverage ─────────────────────────────
+    log.info("evaluate_extended: computing equity & coverage metrics …")
+
+    def _equity_row(name):
+        sgdf = station_gdfs[name]
+        g_val = station_population_gini(sgdf, blocks)
+        cov   = population_coverage_at_radii(sgdf, blocks, radii=(250, 500, 1000))
+        hn    = high_need_coverage(sgdf, blocks)
+        return name, g_val, cov, hn
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as pool:
+        eq_futures = {pool.submit(_equity_row, n): n for n in active}
+        equity_results: dict = {}
+        for fut in concurrent.futures.as_completed(eq_futures):
+            name, g_val, cov, hn = fut.result()
+            equity_results[name] = (g_val, cov, hn)
+
+    eq_headers = ["variant", "pop_gini", "cov_250m%", "cov_500m%", "cov_1km%", "high_need_cov%"]
+    eq_rows = []
+    for name in active:
+        if name not in equity_results:
+            continue
+        g_val, cov, hn = equity_results[name]
+        eq_rows.append([
+            name,
+            _fmt(g_val, ".3f"),
+            _fmt(cov.get(250,  float("nan")), ".1f"),
+            _fmt(cov.get(500,  float("nan")), ".1f"),
+            _fmt(cov.get(1000, float("nan")), ".1f"),
+            _fmt(hn, ".1f"),
+        ])
+
+    _print_table("Equity & Population Coverage", eq_headers, eq_rows)
+
+    # ── Table 2: Service Efficiency & Transfer Burden ─────────────────────
+    log.info("evaluate_extended: computing efficiency metrics …")
+
+    def _eff_row(name):
+        sgdf = station_gdfs[name]
+        km   = track_kms.get(name, float("nan"))
+        eff  = service_efficiency(sgdf, km, blocks)
+        return name, km, eff
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as pool:
+        eff_futures = {pool.submit(_eff_row, n): n for n in active}
+        eff_results: dict = {}
+        for fut in concurrent.futures.as_completed(eff_futures):
+            name, km, eff = fut.result()
+            eff_results[name] = (km, eff)
+
+    log.info("evaluate_extended: computing transfer burden (generated networks) …")
+    xfer_results: dict = {}
+    for name, (ls, gr, st) in line_data.items():
+        log.info("evaluate_extended: transfer_burden for %s …", name)
+        xfer_results[name] = transfer_burden(ls, gr, st)
+
+    xf_headers = [
+        "variant", "track_km", "pop_per_km",
+        "mean_xfers", "0xfer%", "1xfer%", "2+xfer%",
+    ]
+    xf_rows = []
+    for name in active:
+        km, eff = eff_results.get(name, (float("nan"), float("nan")))
+        xf = xfer_results.get(name)
+        two_plus = (
+            (xf.get("two_plus_pct", 0.0) + xf.get("unreachable_pct", 0.0))
+            if xf else float("nan")
+        )
+        xf_rows.append([
+            name,
+            _fmt(km,  ".1f"),
+            _fmt(eff, ".2f"),
+            _fmt(xf.get("mean_min_xfers", float("nan")) if xf else float("nan"), ".2f"),
+            _fmt(xf.get("zero_pct",      float("nan")) if xf else float("nan"), ".1f"),
+            _fmt(xf.get("one_pct",       float("nan")) if xf else float("nan"), ".1f"),
+            _fmt(two_plus if not (isinstance(two_plus, float) and math.isnan(two_plus)) else float("nan"), ".1f"),
+        ])
+
+    _print_table("Service Efficiency & Transfer Burden", xf_headers, xf_rows)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -904,7 +1111,8 @@ def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: i
         "row_snap": lambda: stage_row_snap(cfg, force),
         "cost": lambda: stage_cost(cfg, force),
         "ridership": lambda: stage_ridership(cfg, force),
-        "evaluate": lambda: stage_evaluate(cfg, county_shapes, neighborhoods),
+        "evaluate":          lambda: stage_evaluate(cfg, county_shapes, neighborhoods),
+        "evaluate_extended": lambda: stage_evaluate_extended(cfg, county_shapes, neighborhoods),
     }
 
     stage_set = set(stages)

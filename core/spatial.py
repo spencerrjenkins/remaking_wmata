@@ -84,15 +84,23 @@ def average_distance_to_points_within_polygon(
         polygons = [polygon]
 
     rng = np.random.default_rng()
-    samples = []
-    while len(samples) < num_samples:
-        areas = [poly.area for poly in polygons]
-        poly = rng.choice(polygons, p=np.array(areas) / np.sum(areas))
-        minx, miny, maxx, maxy = poly.bounds
-        x = rng.uniform(minx, maxx)
-        y = rng.uniform(miny, maxy)
-        if poly.contains(Point(x, y)):
-            samples.append((x, y))
+    areas = np.array([poly.area for poly in polygons])
+    area_weights = areas / areas.sum()
+    bounds = np.array([poly.bounds for poly in polygons])  # (N, 4)
 
-    dists, _ = tree.query(samples)
+    samples: list[tuple[float, float]] = []
+    batch = max(num_samples * 4, 2000)
+    while len(samples) < num_samples:
+        # Pick polygons proportionally to area, then generate candidates in bulk.
+        poly_idxs = rng.choice(len(polygons), size=batch, p=area_weights)
+        bx = bounds[poly_idxs]
+        xs = rng.uniform(bx[:, 0], bx[:, 2])
+        ys = rng.uniform(bx[:, 1], bx[:, 3])
+        for i in range(batch):
+            if len(samples) >= num_samples:
+                break
+            if polygons[poly_idxs[i]].contains(Point(xs[i], ys[i])):
+                samples.append((xs[i], ys[i]))
+
+    dists, _ = tree.query(samples[:num_samples])
     return float(np.mean(dists))
