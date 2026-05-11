@@ -12,7 +12,7 @@ from data_cleaning import (
     filter_by_county_tokens,
     normalize_source_frame,
 )
-from core.spatial import filter_points_in_polygons
+from funcs import filter_points_in_polygons
 from transit_data import load_arcgis_source, load_source_manifest
 
 
@@ -24,7 +24,7 @@ def load_county_shapes(county_shapes_path: Optional[str]) -> Optional[gpd.GeoDat
         return None
     county_shapes = gpd.read_file(county_shapes_path)
     if county_shapes.crs is None:
-        county_shapes = county_shapes.set_crs("EPSG:4326")
+        county_shapes = county_shapes.set_crs("EPSG:4326", allow_override=True)
     return county_shapes
 
 

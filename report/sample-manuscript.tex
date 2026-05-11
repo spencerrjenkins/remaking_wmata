@@ -85,7 +85,8 @@ Loudoun County & 420,959 & 334 & 51107 \\
 \toprule
 Source & Description \\
 \midrule
-US Census Bureau & Census blocks \\
+US Census Bureau TIGER/Line~\cite{lit:tiger2023} & Census block shapefiles \\
+American Community Survey~\cite{lit:acs2022} & Socioeconomic equity features \\
 Open Data DC/MD/VA & Points of interest, land use \\
 Arlington County & Neighborhood boundaries \\
 State of Maryland & Neighborhood boundaries \\
@@ -126,7 +127,7 @@ The first step is to define the study area. Table~\ref{tab:counties} lists the c
     \Description{A map highlighting the counties and districts included in the Washington, DC metropolitan area for the study.}
 \end{figure}
 
-Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau. Transit potential for each block is calculated as population divided by area. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
+Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau TIGER/Line tabblock20 shapefiles~\cite{lit:tiger2023}. Transit potential for each block is calculated as population divided by area. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
 
 % --- Figure: Census Block Map ---
 \begin{figure}[ht]
@@ -187,11 +188,32 @@ The census block data is transformed by taking the log of the population density
 
 This data is augmented with points for important destinations, as shown in Table~\ref{tab:datasources}. The selection reflects the availability of data from each source. The study also includes all bus and rail stops in the counties listed, to approximate areas of high transit importance.
 
-A kernel density estimate (KDE) is constructed over the selected points to provide scores for spatial queries at several stages. Figure~\ref{fig:kde_heatmap} displays the KDE heatmap used to model spatial demand for transit.
+A kernel density estimate (KDE) is constructed over the selected points to provide scores for spatial queries at several stages~\cite{bib:silverman1986density}. Figure~\ref{fig:kde_heatmap} displays the KDE heatmap used to model spatial demand for transit.
+
+To incorporate non-population demand and equity considerations, I also build a multi-factor demand surface over census blocks using population density, point-of-interest (POI) proximity, existing transit access, and tract-level American Community Survey (ACS) variables~\cite{lit:acs2022}. The demand score is defined as a weighted, min-max normalized combination:
+\[
+    D = w_{pop}\hat{p} + w_{poi}\hat{d} + w_{transit}\hat{a} + w_{eq}\hat{e}
+\]
+where $\hat{p}$ is population density, $\hat{d}$ is POI density within a 1 km radius, $\hat{a}$ is inverse distance to the nearest existing transit stop, and $\hat{e}$ is an equity signal constructed from ACS median income, poverty rate, disability rate, and zero-vehicle household share. These block-level demand features are exported as \texttt{demand\_features.geojson} and used in extended evaluation and sensitivity checks.
+
+\begin{table}[h]
+\caption{Demand Feature Weights Used for Multi-Factor Scoring}
+\label{tab:demandweights}
+\begin{tabular}{lc}
+\toprule
+\textbf{Component} & \textbf{Weight} \\
+\midrule
+Population density ($w_{pop}$) & 1.00 \\
+POI density ($w_{poi}$) & 0.40 \\
+Transit access ($w_{transit}$) & 0.25 \\
+ACS equity signal ($w_{eq}$) & 0.35 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 Node importance is further refined using a two-layer GraphSAGE mean aggregator~\cite{hamilton2017graphsage} implemented in pure NumPy. Each node is featurized by its geographic coordinates, log-KDE density, degree, clustering coefficient, and approximate betweenness centrality. Two rounds of neighborhood aggregation propagate demand signals through the graph: a node surrounded by many high-demand neighbors scores higher than an isolated node with the same KDE value. Final scores are the L2-normalized combination of the GNN embedding norm and KDE density, normalized to $[0, 1]$. An optional Graph Attention Network variant~\cite{velickovic2018gat} is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
 
-Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA, aggregated from census blocks to tracts, and combined into a demand surface based on job-flow volumes to the top origin-destination pairs. This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
+Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files), aggregated from census blocks to tracts, and combined into a demand surface based on job-flow volumes to the top origin-destination pairs. This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
 
 % --- Figure: KDE Heatmap ---
 \begin{figure}[ht]
@@ -204,11 +226,11 @@ Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023}
 
 
 
-A mesh of candidate transit points is generated to balance spatial coverage with computational tractability. Population-based points (census block centroids) are combined with non-population points and deduplicated. The Gabriel graph, constructed using \texttt{libpysal.weights.Gabriel}, connects mutually closest points, resulting in a proximity network suitable for transit planning. The Gabriel graph is converted to a \texttt{networkx} graph for further manipulation, including assignment of edge weights based on Euclidean distance. This mesh serves as the substrate for both random walk and genetic algorithm-based network generation.
+A mesh of candidate transit points is generated to balance spatial coverage with computational tractability. Population-based points (census block centroids) are combined with non-population points and deduplicated. The Gabriel graph~\cite{gabriel1969} constructed using \texttt{libpysal.weights.Gabriel} connects mutually closest points, resulting in a proximity network suitable for transit planning. The Gabriel graph is converted to a \texttt{networkx} graph for further manipulation, including assignment of edge weights based on Euclidean distance. This mesh serves as the substrate for both random walk and genetic algorithm-based network generation.
 
-A Gabriel graph is constructed using the points. The graph is contracted by condensing Louvain communities by a user-defined threshold, forming the overall search space for the network. The network is constructed from the nodes and edges of this graph.
+A Gabriel graph is constructed using the points. The graph is contracted by condensing Louvain communities~\cite{blondel2008louvain} by a user-defined threshold, forming the overall search space for the network. The network is constructed from the nodes and edges of this graph.
 
-With the data fully preprocessed, one of three network construction algorithms is used to determine which line segments from the contracted Gabriel graph become part of the transit network. Figure~\ref{fig:contracted_gabriel} shows the contracted Gabriel graph used as the basis for candidate network construction.
+With the data fully preprocessed, one of four network construction algorithms (naive, iterative, genetic, or ACO) is used to determine which line segments from the contracted Gabriel graph become part of the transit network. Across all four methods, fixed no-go zones are enforced around the White House and U.S. Capitol (900\,m buffers) so generated routes avoid protected federal core areas. Figure~\ref{fig:contracted_gabriel} shows the contracted Gabriel graph used as the basis for candidate network construction.
 
 % --- Figure: Contracted Gabriel Graph ---
 \begin{figure}[ht]
@@ -294,7 +316,7 @@ Crossover and mutation produce the next generation. Crossover combines parts of 
 \subsection{Network Post-processing}
 Each walk represents a candidate metro line. Lines are grouped by shared alignment using a pairwise distance matrix and a similarity threshold.
 
-Not all nodes in the contracted Gabriel graph become stations due to varying edge lengths. Stations are selected as all terminal nodes, transfer points between different line groups, and nodes spaced at least 1 km apart. This ensures each station serves a catchment area of roughly 500 meters, corresponding to a 15-minute walk.
+Not all nodes in the contracted Gabriel graph become stations due to varying edge lengths. Stations are selected as all terminal nodes, transfer points between different line groups, and nodes spaced at least 1 km apart. This ensures each station serves a catchment area of roughly 500 meters.
 
 Station names are assigned by proximity to neighborhood centroids, using data from Arlington County, Maryland, and the District of Columbia. If multiple stations fall within the same neighborhood, a numeric suffix is added. I was unable to find neighborhood name or boundary data for for other parts of Virginia. Figure~\ref{fig:voronoi} illustrates the Voronoi polygons used to analyze neighborhood coverage and spatial equity.
 
@@ -312,7 +334,7 @@ Station names are assigned by proximity to neighborhood centroids, using data fr
 Candidate networks are evaluated using benchmarks that reflect practical and theoretical priorities: geographic coverage (fraction of high-demand areas served), network connectivity (linking major regions), efficiency (minimizing redundant or excessively long lines), and demand capture (maximizing KDE-weighted coverage). These metrics are computed for each network and inform both random walk scoring and the genetic algorithm's fitness function.
 
 \subsection{Influential Hyperparameters}
-There were many hyperparameters that contributed to the success or lack thereof of the input. Table \ref{tab:hyperparams} shows the hyperparameters and the values used. The Louvain community resolution threshold was a key factor in determining the success of the network creation algorithm. Higher networks lead to stronger community contraction, leading to sparser graphs. The value of 0.07 provided a balance between a network with far too large of a search space and far too long considering short edges of less than a city block, while values that were too great resulted in suburban nodes being greatly reduced or lost. The line minimum and maximum distance were selected to reflect the size of the Washington metropolitan area and the distance of similar rapid transit services across the United States. The angle constraints were chosen so that the course of a given transit line would be preserved while still allowing for options and randomness. A minimum angle constraint of greater than 130 degrees results in premature halting of the walk algorithm as many nodes do not have any edges with angles greater than this. The same applies to the maximum deviation and maximum reset angles, where values too low for both hyperparameters results in walks reaching nodes they cannot proceed from. The station catchment area size, used in determining station scoring and spacing, is set to 500 meters, which reflects an average walking speed of 3 km/hr with Manhattan distance, and indicates the range around a station accessible by walking speed. The genetic algorithm weights were chosen to provide the strongest preference towards networks with coverage of low- and high-density areas on the same line. 
+There were many hyperparameters that contributed to the success or lack thereof of the input. Table \ref{tab:hyperparams} shows the hyperparameters and the values used. The Louvain community resolution threshold was a key factor in determining the success of the network creation algorithm. Higher networks lead to stronger community contraction, leading to sparser graphs. The value of 0.07 provided a balance between a network with far too large of a search space and far too long considering short edges of less than a city block, while values that were too great resulted in suburban nodes being greatly reduced or lost. The line minimum and maximum distance were selected to reflect the size of the Washington metropolitan area and the distance of similar rapid transit services across the United States. The angle constraints were chosen so that the course of a given transit line would be preserved while still allowing for options and randomness. A minimum angle constraint of greater than 130 degrees results in premature halting of the walk algorithm as many nodes do not have any edges with angles greater than this. The same applies to the maximum deviation and maximum reset angles, where values too low for both hyperparameters results in walks reaching nodes they cannot proceed from. Minimum station spacing is set to 1 km, while a 500 m catchment radius is used for coverage and equity metrics. The genetic algorithm weights were chosen to provide the strongest preference towards networks with coverage of low- and high-density areas on the same line. 
 
 % --- Hyperparameter Table ---
 \begin{table*}[h]
@@ -330,7 +352,8 @@ Minimum angle & Minimum angle between consecutive edges (degrees) & 130 \\
 Maximum deviation angle & Angle leading to walk behavior forcing return to course & 80 \\
 Maximum reset angle & Angle that will reset return-to-course behavior (degrees) & 30 \\
 Group assignment threshold & Similarity threshold for grouping lines & 50\% \\
-Station radius & Minimum distance between stations (meters) & 500 \\
+Minimum station spacing & Minimum distance between stations (meters) & 1,000 \\
+Station catchment radius & Catchment radius for coverage metrics (meters) & 500 \\
 Iterative improvement iterations & Number of iterations for improvement algorithm & 100 \\
 Genetic: total score weight & Weight for total score in fitness function & 1 \\
 Genetic: service pattern weight & Weight for service pattern in fitness function & 1000 \\
@@ -342,6 +365,39 @@ Genetic: diversity incentive weight & Incentive for diversity in population & -1
 }
 \end{table*}
 
+\subsection{Pipeline Orchestration and Reproducibility}
+The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}) spanning 14 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
+
+\begin{table*}[h]
+\caption{Pipeline Stages and Primary Outputs}
+\label{tab:pipeline}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lll}
+\toprule
+\textbf{Stage} & \textbf{Primary Output} & \textbf{Purpose} \\
+\midrule
+region & \texttt{complete\_region\_df.geojson} & Census blocks + transit potential \\
+transit\_points & \texttt{transit.geojson} & Aggregate real-world stops \\
+graph\_points & \texttt{complete\_points.geojson} & Seed points + POIs + transit \\
+network & \texttt{graph.pkl}, \texttt{kde.pkl} & Gabriel graph + KDE scoring \\
+gnn\_scoring & updated pickles & GraphSAGE re-scoring \\
+lodes & \texttt{data/lodes/*.parquet} & LODES OD employment data \\
+naive & \texttt{lines\_naive.geojson} & Random-walk network \\
+iterative & \texttt{lines\_iterative.geojson} & Iterative improvement network \\
+aco & \texttt{lines\_aco.geojson} & MAX-MIN Ant System network \\
+genetic & \texttt{lines\_genetic.geojson} & Genetic algorithm network \\
+row\_snap & lines GeoJSON update & ROW type classification \\
+cost & lines GeoJSON update & Construction cost estimates \\
+ridership & lines GeoJSON update & Gravity model ridership \\
+evaluate & stdout tables & Basic coverage metrics \\
+evaluate\_extended & stdout tables & Equity, efficiency, transfers \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
+
+Several supporting command-line utilities were added to make preprocessing reproducible and auditable: \texttt{build\_non\_population\_points.py} (ArcGIS POI ingestion), \texttt{build\_acs\_features.py} (ACS tract attributes), \texttt{build\_demand\_features.py} (multi-factor demand scoring), and \texttt{build\_data\_catalog.py} (source validation/catalog generation). Together, these updates reduce manual preprocessing and improve end-to-end reproducibility.
+
 \section{Right-of-Way Classification and Construction Cost}
 
 \subsection{ROW Classification}
@@ -350,7 +406,24 @@ Each generated line is classified by right-of-way (ROW) type using OSMnx~\cite{b
 
 \subsection{Construction Cost Estimation}
 
-Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. Shared segments between overlapping lines receive a 50\% cost discount. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
+Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), subway surface (\$80M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$30M surface, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. Shared segments between overlapping lines receive a 50\% cost discount. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
+
+\begin{table}[h]
+\caption{ROW Cost Parameters Used for Capital Estimates}
+\label{tab:rowcosts}
+\begin{tabular}{lcc}
+\toprule
+\textbf{ROW type} & \textbf{Track cost (M USD/km)} & \textbf{Station cost (M USD)} \\
+\midrule
+Subway tunnel & 750 & 200 \\
+Subway surface & 80 & 30 \\
+Existing rail & 25 & 15 \\
+Elevated & 200 & 60 \\
+Street running & 100 & 20 \\
+Unknown (fallback) & 120 & 35 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Ridership Estimation}
 
@@ -358,7 +431,7 @@ Station boardings are estimated using a doubly-constrained gravity model~\cite{w
 \[
   T_{ij} \propto O_i \cdot D_j \cdot \exp(-\beta \cdot d_{ij})
 \]
-where $O_i$ and $D_j$ are origin and destination demand signals combining population density and LODES employment OD flows~\cite{lodes2023}, and $d_{ij}$ is network distance. The model is calibrated to WMATA's FY2023 ridership of approximately 350,000 daily boardings~\cite{lit:wmata_stats}. Daily totals are disaggregated by time of day using WMATA's observed ridership profile: AM peak 26\%, PM peak 27\%, midday 30\%, evening 10\%, late night 5\%, and early morning 2\%. Station-level boardings and hourly profiles are stored in the output GeoJSON and visualized in the Transit Network Viewer as interactive sparkline charts.
+where $O_i$ and $D_j$ are origin and destination demand signals combining population density and LODES employment OD flows~\cite{lodes2023}, and $d_{ij}$ is Euclidean distance between stations and demand points within an 800 m catchment. The model uses $\beta = 0.0008$ and is calibrated to WMATA's FY2023 ridership of approximately 350,000 daily boardings~\cite{lit:wmata_stats}. Daily totals are disaggregated by time of day using WMATA's observed ridership profile: early AM 4\%, AM peak 26\%, midday 30\%, PM peak 27\%, evening 11\%, and late night 2\%. Station-level boardings and hourly profiles are stored in the output GeoJSON and visualized in the Transit Network Viewer as interactive sparkline charts.
 
 \section{Network Visualization and Exploration}
 
@@ -382,11 +455,19 @@ The web application's interface centers around a mapping tool powered by Leaflet
     \Description{A screenshot showing the itinerary details window in the Transit Network Viewer, listing route, stations, and travel time.}
 \end{figure}
 
-The most important feature of the Transit Network Viewer is the Route Finder, which users can use to calculate the travel time between selected start and end locations. The route is determined using Dijkstra's algorithm, with a penalty incurred for every time a route requires a transfer. If the user selects start and end locations that are not at stations, walking time estimates are included for the parts of the itinerary both before and after the trip through the metro network. If an itinerary is found, a window displays the details of the itinerary, including the route required, the number of stations the route passes through, the total distance traveled, and the estimated travel time. The travel time calculation uses an average speed across the network of 80 km/h, 6 minutes per transfer, and a walking speed of 5 km/h. 
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.3\textwidth]{./img/itin_2_gen.png}
+    \caption{Transit Network Viewer route finder for the Bethesda-to-Reston itinerary (genetic network).}
+    \label{fig:viewer_map2}
+    \Description{A screenshot of the Transit Network Viewer showing a suburban-to-suburban route selection.}
+\end{figure}
+
+The most important feature of the Transit Network Viewer is the Route Finder, which users can use to calculate the travel time between selected start and end locations. The route is determined using Dijkstra's algorithm, with a penalty incurred for every time a route requires a transfer. If the user selects start and end locations that are not at stations, walking time estimates are included for the parts of the itinerary both before and after the trip through the metro network. If an itinerary is found, a window displays the details of the itinerary, including the route required, the number of stations the route passes through, the total distance traveled, and the estimated travel time. The travel time calculation uses an average in-vehicle speed of 80 km/h, a 6-minute transfer penalty, a 0.4-minute dwell penalty per intermediate station, and a walking speed of approximately 100 m/min (6 km/h) for access and egress legs. 
 
 \section{Network Performance Analysis}
 
-I analyze the success of the networks quantitatively using several metrics. First, I determine the critical coverage percentage by calculating the proportion of critical transit points (high-density census blocks, critical services) that fall within the catchment area of any station in the network. The neighborhood coverage percentage is the fraction of neighborhood centroids within the catchment areas of at least one station. I also take the average distance from the nearest station across the entire metropolitan area and for the District of Columbia. The pipeline also produces estimated capital cost and daily ridership for each network via the ROW classification, cost, and ridership stages described above. Table \ref{tab:networkmetrics} provides the calculated coverage data for the networks I created using each algorithm, and for the real-world WMATA network.
+I analyze the success of the networks quantitatively using several metrics. First, I determine the critical coverage percentage by calculating the proportion of critical transit points (high-density census blocks, critical services) that fall within the catchment area of any station in the network. The neighborhood coverage percentage is the fraction of neighborhood centroids within the catchment areas of at least one station. I also take the average distance from the nearest station across the entire metropolitan area and for the District of Columbia. The pipeline also produces estimated capital cost and daily ridership for each network via the ROW classification, cost, and ridership stages described above. Table \ref{tab:networkmetrics} provides the calculated coverage data for the three baseline generated networks (naive, iterative, genetic) and for the real-world WMATA network; the ACO output is evaluated in the extended metrics pipeline and is the default network in the deployed viewer.
 
 % --- Algorithm Network Figures ---
 \begin{figure}[ht]
@@ -432,6 +513,8 @@ Real-world & 13.39 & 3.03 & 14.94 & 1.59 \\
 \end{table*}
 
 By the metrics established in this table, the networks produced by all three algorithms outperform the real-world network. They exhibit higher critical coverage and neighborhood coverage rates, and provide lower average distances across the region. Each algorithm performs most strongly in a different metric: the genetic algorithm performs most strongly in neighborhood coverage and average distance within DC, while the naive algorithm shows the lowest average distance across the entire region, and the iterative improvement algorithm shows the highest critical coverage. 
+
+To comprehensively reflect project updates, the evaluation workflow now includes an \texttt{evaluate\_extended} stage with additional equity and operations metrics: station-level population Gini, population coverage at 250\,m/500\,m/1\,km, high-need block coverage (top quartile of transit potential), service efficiency (population served per km of service track), and transfer burden (share of OD pairs requiring 0, 1, or 2+ transfers). These metrics provide a stronger basis for comparing ACO and the baseline algorithms under a common framework.
 
 I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
 

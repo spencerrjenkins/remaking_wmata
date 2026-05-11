@@ -58,14 +58,23 @@ def mark_station_nodes(
                 total_distance = 0.0
                 c = 2
                 while curr_node != prev_station_node and prev_station_node is not None:
-                    if curr_prev_node in graph[curr_node]:
-                        total_distance += graph[curr_node][curr_prev_node].get("weight", 0)
-                    elif curr_node in graph[curr_prev_node]:
-                        total_distance += graph[curr_prev_node][curr_node].get("weight", 0)
-                    else:
-                        total_distance += haversine(
-                            positions[curr_node], positions[curr_prev_node]
-                        )
+                    if curr_prev_node is None:
+                        total_distance = min_station_dist
+                        break
+
+                    dist = None
+                    if graph.has_node(curr_node) and curr_prev_node in graph[curr_node]:
+                        dist = graph[curr_node][curr_prev_node].get("weight", 0)
+                    elif graph.has_node(curr_prev_node) and curr_node in graph[curr_prev_node]:
+                        dist = graph[curr_prev_node][curr_node].get("weight", 0)
+                    elif curr_node in positions and curr_prev_node in positions:
+                        dist = haversine(positions[curr_node], positions[curr_prev_node])
+
+                    if dist is None:
+                        total_distance = min_station_dist
+                        break
+
+                    total_distance += dist
                     curr_node = curr_prev_node
                     curr_prev_node = walk[i - c]
                     c += 1

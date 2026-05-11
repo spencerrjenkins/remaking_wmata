@@ -72,7 +72,7 @@ def infer_locality_label(row: pd.Series) -> str:
 def normalize_source_frame(gdf: gpd.GeoDataFrame, spec: SourceSpec) -> gpd.GeoDataFrame:
     cleaned = lowercase_columns(gdf)
     if cleaned.crs is None:
-        cleaned = cleaned.set_crs("EPSG:4326")
+        cleaned = cleaned.set_crs("EPSG:4326", allow_override=True)
     cleaned = coerce_geometries_to_points(cleaned)
     cleaned["source_name"] = cleaned.get("source_name", spec.name)
     cleaned["source_category"] = cleaned.get("source_category", spec.category)
