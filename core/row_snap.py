@@ -110,7 +110,7 @@ def load_or_download_osm_network(
 
         # Merge into a simple edge list (lon, lat pairs + tags)
         edges = []
-        to_4326 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+        to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
         def _add_edges_from_graph(G, default_tags=None):
             for u, v, data in G.edges(data=True):
@@ -121,8 +121,8 @@ def load_or_download_osm_network(
                 udata = G.nodes[u]
                 vdata = G.nodes[v]
                 # Store as 3857 for distance calculations
-                x1, y1 = to_4326.transform(udata["x"], udata["y"])
-                x2, y2 = to_4326.transform(vdata["x"], vdata["y"])
+                x1, y1 = to_3857.transform(udata["x"], udata["y"])
+                x2, y2 = to_3857.transform(vdata["x"], vdata["y"])
                 row_type = _classify_osm_way(tags)
                 edges.append({
                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,

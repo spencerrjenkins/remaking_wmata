@@ -310,10 +310,13 @@ def stage_transit_points(
         sources = [f.result() for f in _futs]
     sources.append(filter_points_in_polygons(_f_vbus.result(), county_shapes.geometry))
 
-    combined = gpd.GeoDataFrame(geometry=pd.concat([s.geometry for s in sources]))
+    combined = gpd.GeoDataFrame(
+        geometry=pd.concat([s.to_crs("EPSG:4326").geometry for s in sources]),
+        crs="EPSG:4326",
+    )
     points_gdf = filter_points_in_polygons(combined, county_shapes.geometry).to_crs(epsg=3857)
     points_gdf = points_gdf.drop_duplicates().reset_index(drop=True)
-    save_geojson(gpd.GeoDataFrame(points_gdf), str(out))
+    save_geojson(gpd.GeoDataFrame(points_gdf, crs="EPSG:3857"), str(out))
     log.info("transit_points: %d stops → %s", len(points_gdf), out)
 
 
@@ -344,10 +347,13 @@ def stage_graph_points(cfg: PipelineConfig, force: bool = False) -> None:
         poi_dc, poi_md, poi_va = _f_dc.result(), _f_md.result(), _f_va.result()
     merged = reset_and_concat(graph_points, poi_dc, poi_md, poi_va)
     df_points = gpd.GeoDataFrame(
-        geometry=merged["geometry"].centroid
+        geometry=merged["geometry"].centroid, crs=merged.crs
     ).drop_duplicates().reset_index(drop=True)
     transit = load_geojson(str(DATA_DIR / "transit.geojson"))
-    df_points = pd.concat([df_points.to_crs(epsg=3857), transit]).reset_index(drop=True)
+    df_points = gpd.GeoDataFrame(
+        pd.concat([df_points.to_crs(epsg=3857), transit.to_crs(epsg=3857)]).reset_index(drop=True),
+        crs="EPSG:3857",
+    )
     save_geojson(df_points, str(out))
     log.info("graph_points: %d total points → %s", len(df_points), out)
 

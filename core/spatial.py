@@ -36,7 +36,12 @@ def filter_points_in_polygons(
     points_gdf: gpd.GeoDataFrame,
     polygons,
 ) -> gpd.GeoDataFrame:
-    """Return only those points that fall inside any of the given polygons."""
+    """Return only those points that fall inside any of the given polygons.
+
+    If *points_gdf* has a declared CRS and *polygons* is a GeoSeries with a
+    different CRS, the points are temporarily reprojected to match the polygons
+    for the containment test; the returned frame keeps the original CRS.
+    """
     flat_polys = []
     for poly in polygons:
         if isinstance(poly, MultiPolygon):
@@ -44,7 +49,13 @@ def filter_points_in_polygons(
         elif isinstance(poly, Polygon):
             flat_polys.append(poly)
     multi = MultiPolygon(flat_polys)
-    mask = points_gdf.geometry.apply(lambda pt: pt.within(multi))
+
+    pts = points_gdf
+    poly_crs = getattr(polygons, "crs", None)
+    if pts.crs is not None and poly_crs is not None and pts.crs != poly_crs:
+        pts = pts.to_crs(poly_crs)
+
+    mask = pts.geometry.apply(lambda pt: pt.within(multi))
     return points_gdf[mask].copy()
 
 

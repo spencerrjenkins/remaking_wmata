@@ -60,7 +60,7 @@ def save_graph_to_geojson(graph, positions: dict, out_path: str) -> None:
         if u in positions and v in positions
     ]
 
-    gpd.GeoDataFrame(features).to_file(out_path, driver="GeoJSON")
+    gpd.GeoDataFrame(features, crs="EPSG:4326").to_file(out_path, driver="GeoJSON")
 
 
 def save_lines_to_geojson(
@@ -104,8 +104,10 @@ def save_lines_to_geojson(
         station_lookup = node_station_status or {}
         line_nodes = [n for n in line if n in positions]
         coords = [to_latlon(positions[n]) for n in line_nodes]
+        if len(coords) < 2:
+            continue
         is_station = [bool(station_lookup.get(n, True)) for n in line_nodes]
-        name_list = [names[n] if is_station[i] else "" for i, n in enumerate(line_nodes)]
+        name_list = [names.get(n, "Unnamed station") if is_station[i] else "" for i, n in enumerate(line_nodes)]
 
         feature: dict = {
             "geometry": LineString(coords),
@@ -143,7 +145,7 @@ def save_lines_to_geojson(
 
         features.append(feature)
 
-    gpd.GeoDataFrame(features).to_file(out_path, driver="GeoJSON")
+    gpd.GeoDataFrame(features, crs="EPSG:4326").to_file(out_path, driver="GeoJSON")
 
 
 def load_lines_from_geojson(path: str):

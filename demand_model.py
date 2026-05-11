@@ -51,7 +51,7 @@ def _safe_numeric(series: pd.Series) -> pd.Series:
 def _prepare_projected_frame(gdf: gpd.GeoDataFrame, target_crs: str = "EPSG:3857") -> gpd.GeoDataFrame:
     frame = gdf.copy()
     if frame.crs is None:
-        frame = frame.set_crs("EPSG:4326", allow_override=True)
+        frame = frame.set_crs("EPSG:4326")
     return frame.to_crs(target_crs)
 
 
@@ -220,7 +220,7 @@ def build_demand_features(
     elif acs_gdf is not None and not acs_gdf.empty and isinstance(acs_gdf, gpd.GeoDataFrame):
         acs_frame = acs_gdf.copy()
         if acs_frame.crs is None:
-            acs_frame = acs_frame.set_crs(projected_crs, allow_override=True)
+            acs_frame = acs_frame.set_crs(projected_crs)
         if acs_frame.crs != blocks.crs:
             acs_frame = acs_frame.to_crs(projected_crs)
         block_points = gpd.GeoDataFrame({"geometry": centroids}, geometry="geometry", crs=projected_crs)
@@ -303,7 +303,7 @@ def build_area_demand_features(
     elif acs_gdf is not None and not acs_gdf.empty and isinstance(acs_gdf, gpd.GeoDataFrame):
         acs_frame = acs_gdf.copy()
         if acs_frame.crs is None:
-            acs_frame = acs_frame.set_crs(projected_crs, allow_override=True)
+            acs_frame = acs_frame.set_crs(projected_crs)
         if acs_frame.crs != areas.crs:
             acs_frame = acs_frame.to_crs(projected_crs)
         area_points = gpd.GeoDataFrame({"geometry": centroids}, geometry="geometry", crs=projected_crs)

@@ -24,7 +24,7 @@ def load_county_shapes(county_shapes_path: Optional[str]) -> Optional[gpd.GeoDat
         return None
     county_shapes = gpd.read_file(county_shapes_path)
     if county_shapes.crs is None:
-        county_shapes = county_shapes.set_crs("EPSG:4326", allow_override=True)
+        county_shapes = county_shapes.set_crs("EPSG:4326")
     return county_shapes
 
 

@@ -159,11 +159,17 @@ def station_gdf_catchment_coverage(
 ) -> float:
     """
     Percentage of *points_gdf* covered by station catchment circles derived
-    from *stations_gdf*.
+    from *stations_gdf*.  Both frames must be in a projected CRS (metres) so
+    that *catchment_radius* is interpreted correctly; if CRS differs, *points_gdf*
+    is reprojected to match *stations_gdf*.
     """
     if stations_gdf.empty or points_gdf.empty:
         return 0.0
+    pts = points_gdf
+    if (stations_gdf.crs is not None and pts.crs is not None
+            and stations_gdf.crs != pts.crs):
+        pts = pts.to_crs(stations_gdf.crs)
     station_geoms = [pt.buffer(catchment_radius) for pt in stations_gdf.geometry]
     all_catchments = unary_union(station_geoms)
-    covered = points_gdf.geometry.apply(lambda pt: all_catchments.contains(pt))
-    return covered.sum() / len(points_gdf) * 100 if len(points_gdf) > 0 else 0.0
+    covered = pts.geometry.apply(lambda pt: all_catchments.contains(pt))
+    return covered.sum() / len(pts) * 100 if len(pts) > 0 else 0.0
