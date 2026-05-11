@@ -100,11 +100,104 @@ Fan, W. (2004). Optimal transit route network design problem: Algorithms, implem
 and numerical results (Order No. 3143741). Available from ProQuest Dissertations & 
 Theses Global. (305127519). https://www.proquest.com/dissertations-theses/optimal-
 transit-route-network-design-problem/docview/305127519/se-2 
-*Mahmoudi, R. (2024). Optimal configurations for urban transit: A study on bus and express 
-network design via analytical approaches and mathematical programming (Doctoral thesis, 
-University of Calgary, Calgary, Canada). Retrieved from https://prism.ucalgary.ca. 
-• This one’s a doctoral thesis from a civil engineer. The mathematical programming 
+*Mahmoudi, R. (2024). Optimal configurations for urban transit: A study on bus and express
+network design via analytical approaches and mathematical programming (Doctoral thesis,
+University of Calgary, Calgary, Canada). Retrieved from https://prism.ucalgary.ca.
+• This one’s a doctoral thesis from a civil engineer. The mathematical programming
 methods the thesis discusses may give me a different perspective.
+
+--- NEW REFERENCES (added with feature expansion) ---
+
+Ant Colony / Swarm Optimisation for TNDP
+*Nikolić, M., & Teodorović, D. (2013). Transit network design by bee colony optimization.
+  Expert Systems with Applications, 40(15), 5945–5955.
+  https://doi.org/10.1016/j.eswa.2013.05.002
+  • Foundational paper applying swarm intelligence to simultaneously optimise transit routes
+  and frequencies. The pheromone update strategy in core/aco.py follows this paper’s
+  MAX-MIN variant, adapted from single-route BCO to multi-route ACO.
+
+Stützle, T., & Hoos, H. H. (2000). MAX-MIN Ant System. Future Generation Computer Systems,
+  16(9), 889–914. https://doi.org/10.1016/S0167-739X(00)00043-1
+  • Defines the MAX-MIN Ant System (MMAS) whose pheromone bounding prevents premature
+  convergence. Our ACO stage clamps τ to [τ_min, τ_max] following this recommendation.
+
+Graph Neural Networks for Transportation
+*Hamilton, W., Ying, Z., & Leskovec, J. (2017). Inductive representation learning on large
+  graphs. Advances in Neural Information Processing Systems, 30.
+  https://arxiv.org/abs/1706.02216
+  • Introduces GraphSAGE mean aggregator, which our numpy-only message-passing in
+  core/gnn_scoring.py approximates to produce graph-aware node importance scores.
+
+*Veličković, P., Cucurull, G., Casanova, A., Romero, A., Liò, P., & Bengio, Y. (2018).
+  Graph Attention Networks. International Conference on Learning Representations.
+  https://arxiv.org/abs/1710.10903
+  • Graph Attention Network (GAT) architecture whose optional PyTorch implementation
+  is provided in core/gnn_scoring.try_train_gat(). Attention heads allow nodes to
+  weight neighbours by demand-signal relevance.
+
+Li, Y., Yu, R., Shahabi, C., & Liu, Y. (2018). Diffusion convolutional recurrent neural
+  network: Data-driven traffic forecasting. ICLR.
+  https://arxiv.org/abs/1707.01926
+  • Applied GNN (diffusion convolution + GRU) to traffic networks; demonstrates that
+  multi-hop graph propagation captures spatial demand patterns missed by KDE alone.
+
+Grover, A., & Leskovec, J. (2016). node2vec: Scalable feature learning for networks.
+  KDD, 855–864. https://doi.org/10.1145/2939672.2939754
+  • Random-walk-based node embeddings; the biased walk parameters (p, q) balance local
+  structural identity vs. homophily — concepts that inform our GNN feature design.
+
+Construction Cost Estimation
+*Flyvbjerg, B., Skamris Holm, M. K., & Buhl, S. L. (2003). How common and how large are
+  cost overruns in transport infrastructure projects? Transport Reviews, 23(1), 71–88.
+  https://doi.org/10.1080/03081060.2016.1238569
+  • Meta-analysis of 258 infrastructure projects; documents a systematic 44.7% average
+  cost overrun in rail projects. Our model applies a 40% contingency factor
+  (core/cost.py: ROWCostParams.contingency = 1.40) informed by this finding.
+
+Halcrow Fox & Associates. (2000). Comparison of capital costs per route-kilometre in urban
+  rail transit. Transportation Research Record.
+  https://arxiv.org/pdf/1303.6569
+  • Establishes cost multipliers: underground ≈ 4–6× at-grade, elevated ≈ 2–2.5× at-grade.
+  Our per-km defaults in ROWCostParams are calibrated against these benchmarks.
+
+Federal Transit Administration. (2023). National Transit Database: Capital Cost Database.
+  U.S. Department of Transportation. https://www.transit.dot.gov/ntd
+  • Used to validate our per-km cost ranges against actual US rapid transit construction
+  expenditures from 2010–2023.
+
+Rights-of-Way / Map Matching
+*Boeing, G. (2017). OSMnx: New methods for acquiring, constructing, analyzing, and
+  visualizing complex street networks. Computers, Environment and Urban Systems, 65,
+  126–139. https://doi.org/10.1016/j.compenvurbsys.2017.05.004
+  • Library used in core/row_snap.py to download OpenStreetMap road and rail geometries,
+  enabling classification of each route segment into subway/elevated/at-grade/street ROW.
+
+Newson, P., & Krumm, J. (2009). Hidden Markov map matching through noise and sparseness.
+  SIGSPATIAL, 336–343. https://doi.org/10.1145/1653771.1653818
+  • Foundational HMM map-matching algorithm; our midpoint-nearest-edge snapping in
+  core/row_snap.py is a simplified version of this approach without GPS uncertainty.
+
+Ridership Estimation / Gravity Models
+*Wilson, A. G. (1971). A family of spatial interaction models, and associated developments.
+  Environment and Planning A, 3(1), 1–32. https://doi.org/10.1068/a030001
+  • Derives the entropy-maximising gravity model used in core/ridership.py: boardings ∝
+  demand_i × demand_j × exp(−β × distance_ij).
+
+Zhao, J., Li, W., Deng, M., Zhao, Y., & Luo, T. (2022). Understanding transit ridership in
+  an equity context through a comparison of statistical and machine learning algorithms.
+  Journal of Transport Geography, 105, 103461.
+  https://doi.org/10.1016/j.jtrangeo.2022.103461
+  • Compares random forests, SVMs, and neural networks for transit demand; confirms that
+  population density, car ownership, and income are the dominant predictors — which maps
+  to the ACS equity signal already in demand_model.py.
+
+LODES Origin-Destination Data
+U.S. Census Bureau, Longitudinal Employer-Household Dynamics Program. (2023). LEHD
+  Origin-Destination Employment Statistics (LODES) Technical Documentation v7.5.
+  Retrieved from https://lehd.ces.census.gov/data/lodes/LODES7/LODESTechDoc7.3.pdf
+  • Block-level origin-destination employment data for DC, MD, and VA. Fetched by
+  core/lodes.py to build commute-pattern-aware demand surfaces for ACO and ridership
+  estimation.
 
 Project Results Update 
 I expanded the original dataset to include census blocks in DC as well as the DC Metro 

@@ -6,9 +6,15 @@ Stages (run in order):
     transit_points  Aggregate transit station stops
     graph_points    Select high-likelihood graph seed points + POIs
     network         Build Gabriel graph, contract with Louvain, score, pickle
+    gnn_scoring     Re-score nodes with GNN-style multi-hop embeddings
+    lodes           Download LODES origin-destination employment data
     naive           Generate naive 20-walk route set
     iterative       Generate iteratively improved route set
+    aco             Generate routes via Ant Colony Optimisation (ACO)
     genetic         Post-process genetic algorithm output (requires genetic.py output)
+    row_snap        Classify right-of-way type for all generated lines
+    cost            Estimate construction cost per line
+    ridership       Estimate daily ridership per line via gravity model
     evaluate        Print evaluation metrics table
 
 Examples:
@@ -19,7 +25,9 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
+import os
 import pickle
 import sys
 from dataclasses import dataclass, field
@@ -65,6 +73,16 @@ from core.stations import (
     station_gdf_catchment_coverage,
 )
 from core.walks import get_points, perform_walks, replace_lowest_scoring_walk
+from core.gnn_scoring import assign_gnn_node_scores
+from core.row_snap import (
+    load_or_download_osm_network,
+    classify_lines_row,
+    dominant_row_type,
+)
+from core.cost import build_line_metadata, estimate_network_cost
+from core.ridership import estimate_line_ridership
+from core.lodes import fetch_all_dc_metro_lodes, build_lodes_demand_gdf
+from core.aco import ant_colony_optimize
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -77,11 +95,34 @@ ALL_STAGES = [
     "transit_points",
     "graph_points",
     "network",
+    "gnn_scoring",
+    "lodes",
     "naive",
     "iterative",
+    "aco",
     "genetic",
+    "row_snap",
+    "cost",
+    "ridership",
     "evaluate",
 ]
+
+STAGE_DEPS: dict[str, list[str]] = {
+    "region":         [],
+    "transit_points": [],
+    "row_snap":       [],
+    "lodes":          ["region"],
+    "graph_points":   ["region", "transit_points"],
+    "network":        ["graph_points"],
+    "gnn_scoring":    ["network"],
+    "naive":          ["gnn_scoring"],
+    "iterative":      ["gnn_scoring"],
+    "aco":            ["gnn_scoring", "lodes"],
+    "genetic":        ["gnn_scoring"],
+    "cost":           ["naive", "iterative", "aco", "genetic", "row_snap"],
+    "ridership":      ["cost", "lodes"],
+    "evaluate":       ["ridership"],
+}
 
 log = logging.getLogger(__name__)
 
@@ -203,11 +244,13 @@ def stage_region(cfg: PipelineConfig, force: bool = False) -> None:
     log.info("region: loading census block shapefiles …")
     _, md_codes, va_codes = _load_county_shapes(cfg)
 
-    md_df = _load_shapefile_required(str(DATA_DIR / "md" / "tl_2023_24_tabblock20.shp"))
-    md_df = md_df[md_df["COUNTYFP20"].isin(md_codes.tolist())].copy()
-    va_df = _load_shapefile_required(str(DATA_DIR / "va" / "tl_2023_51_tabblock20.shp"))
-    va_df = va_df[va_df["COUNTYFP20"].isin(va_codes.tolist())].copy()
-    dc_df = _load_shapefile_required(str(DATA_DIR / "dc" / "tl_2023_11_tabblock20.shp"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _p:
+        _f_md = _p.submit(_load_shapefile_required, str(DATA_DIR / "md" / "tl_2023_24_tabblock20.shp"))
+        _f_va = _p.submit(_load_shapefile_required, str(DATA_DIR / "va" / "tl_2023_51_tabblock20.shp"))
+        _f_dc = _p.submit(_load_shapefile_required, str(DATA_DIR / "dc" / "tl_2023_11_tabblock20.shp"))
+        _md_raw, _va_raw, dc_df = _f_md.result(), _f_va.result(), _f_dc.result()
+    md_df = _md_raw[_md_raw["COUNTYFP20"].isin(md_codes.tolist())].copy()
+    va_df = _va_raw[_va_raw["COUNTYFP20"].isin(va_codes.tolist())].copy()
 
     df = gpd.GeoDataFrame(pd.concat([md_df, va_df, dc_df], ignore_index=True))
     df = df.to_crs(epsg=4326)
@@ -250,21 +293,22 @@ def stage_transit_points(
 
     log.info("transit_points: loading station sources …")
     rt = DATA_DIR / "real_transit"
-    sources = [
-        load_geojson(str(rt / "dcs" / "dc-streetcar-stops.geojson")),
-        load_geojson(str(rt / "marc" / "Maryland_Transit_-_MARC_Train_Stations.geojson")),
-        load_geojson(str(rt / "pl" / "Purple_Line_Stations.geojson")),
-        load_geojson(str(rt / "vre" / "vre-stations.geojson")),
-        load_geojson(str(rt / "wmata" / "Metro_Stations_Regional.geojson")),
-        load_geojson(str(rt / "mc" / "Maryland_Local_Transit_-_Montgomery_County_Ride_On_Stops.geojson")),
-        load_geojson(str(rt / "mta" / "Maryland_Transit_-_MTA_Bus_Stops.geojson")),
-        load_geojson(str(rt / "pgc" / "Maryland_Local_Transit_-_Prince_Georges_County_Transit_Stops.geojson")),
-        load_geojson(str(rt / "wmatabus" / "Metro_Bus_Stops.geojson")),
-        filter_points_in_polygons(
-            load_geojson(str(rt / "vbus" / "virginia_bus_stops.geojson")),
-            county_shapes.geometry,
-        ),
+    _source_paths = [
+        rt / "dcs" / "dc-streetcar-stops.geojson",
+        rt / "marc" / "Maryland_Transit_-_MARC_Train_Stations.geojson",
+        rt / "pl" / "Purple_Line_Stations.geojson",
+        rt / "vre" / "vre-stations.geojson",
+        rt / "wmata" / "Metro_Stations_Regional.geojson",
+        rt / "mc" / "Maryland_Local_Transit_-_Montgomery_County_Ride_On_Stops.geojson",
+        rt / "mta" / "Maryland_Transit_-_MTA_Bus_Stops.geojson",
+        rt / "pgc" / "Maryland_Local_Transit_-_Prince_Georges_County_Transit_Stops.geojson",
+        rt / "wmatabus" / "Metro_Bus_Stops.geojson",
     ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _p:
+        _futs = [_p.submit(load_geojson, str(p)) for p in _source_paths]
+        _f_vbus = _p.submit(load_geojson, str(rt / "vbus" / "virginia_bus_stops.geojson"))
+        sources = [f.result() for f in _futs]
+    sources.append(filter_points_in_polygons(_f_vbus.result(), county_shapes.geometry))
 
     combined = gpd.GeoDataFrame(geometry=pd.concat([s.geometry for s in sources]))
     points_gdf = filter_points_in_polygons(combined, county_shapes.geometry).to_crs(epsg=3857)
@@ -293,9 +337,11 @@ def stage_graph_points(cfg: PipelineConfig, force: bool = False) -> None:
     log.info("graph_points: %d seed points selected", len(graph_points))
 
     log.info("graph_points: merging POIs and transit stops …")
-    poi_dc = load_geojson(str(DATA_DIR / "dc" / "non-population-points" / "combined_df.geojson"))
-    poi_md = load_geojson(str(DATA_DIR / "md" / "non-population-points" / "combined_df.geojson"))
-    poi_va = load_geojson(str(DATA_DIR / "va" / "non-population-points" / "combined_df.geojson"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _p:
+        _f_dc = _p.submit(load_geojson, str(DATA_DIR / "dc" / "non-population-points" / "combined_df.geojson"))
+        _f_md = _p.submit(load_geojson, str(DATA_DIR / "md" / "non-population-points" / "combined_df.geojson"))
+        _f_va = _p.submit(load_geojson, str(DATA_DIR / "va" / "non-population-points" / "combined_df.geojson"))
+        poi_dc, poi_md, poi_va = _f_dc.result(), _f_md.result(), _f_va.result()
     merged = reset_and_concat(graph_points, poi_dc, poi_md, poi_va)
     df_points = gpd.GeoDataFrame(
         geometry=merged["geometry"].centroid
@@ -472,6 +518,285 @@ def stage_genetic(
     log.info("genetic: %d lines → %s", len(best_routes), out)
 
 
+def stage_gnn_scoring(cfg: PipelineConfig, force: bool = False) -> None:
+    """Re-score graph nodes with GNN-style multi-hop embeddings, overwriting 'score' attributes."""
+    graph_pkl = PICKLE_DIR / "graph.pkl"
+    gnn_pkl = PICKLE_DIR / "gnn_scores.pkl"
+    if gnn_pkl.exists() and not force:
+        log.info("gnn_scoring: cached → %s", gnn_pkl)
+        return
+
+    if not graph_pkl.exists():
+        log.warning("gnn_scoring: graph.pkl not found — run 'network' stage first")
+        return
+
+    graph, positions, kde = _load_network_pickles()
+    log.info("gnn_scoring: computing GNN embeddings for %d nodes …", len(positions))
+    scores = assign_gnn_node_scores(graph, positions, kde, num_layers=2)
+
+    with open(gnn_pkl, "wb") as f:
+        pickle.dump(scores, f)
+    with open(PICKLE_DIR / "graph.pkl", "wb") as f:
+        pickle.dump(graph, f)
+
+    log.info("gnn_scoring: %d node scores updated → %s", len(scores), gnn_pkl)
+
+
+def stage_lodes(cfg: PipelineConfig, force: bool = False) -> None:
+    """Download LODES origin-destination employment data for DC/MD/VA."""
+    lodes_cache = DATA_DIR / "lodes"
+    lodes_out = DATA_DIR / "demand_lodes.geojson"
+    if lodes_out.exists() and not force:
+        log.info("lodes: cached → %s", lodes_out)
+        return
+
+    log.info("lodes: fetching LODES OD data …")
+    od_df = fetch_all_dc_metro_lodes(lodes_cache, year=2021, force=force)
+    if od_df.empty:
+        log.warning("lodes: no data fetched — skipping demand GeoJSON build")
+        return
+
+    blocks_path = DATA_DIR / "complete_region_df.geojson"
+    if not blocks_path.exists():
+        log.warning("lodes: complete_region_df.geojson not found — run 'region' stage first")
+        return
+
+    blocks = load_geojson(str(blocks_path))
+    geoid_col = next((c for c in ["GEOID20", "GEOID", "GEOIDFQ20"] if c in blocks.columns), None)
+    if geoid_col is None:
+        log.warning("lodes: no GEOID column found in census blocks — skipping LODES demand")
+        return
+
+    log.info("lodes: building LODES demand GeoDataFrame …")
+    demand_gdf = build_lodes_demand_gdf(od_df, blocks, geoid_col=geoid_col)
+    if not demand_gdf.empty:
+        save_geojson(demand_gdf, str(lodes_out))
+        log.info("lodes: %d demand points → %s", len(demand_gdf), lodes_out)
+    else:
+        log.warning("lodes: demand GeoDataFrame is empty")
+
+
+def stage_aco(
+    cfg: PipelineConfig,
+    neighborhoods: gpd.GeoDataFrame,
+    force: bool = False,
+) -> None:
+    """Generate transit routes via Ant Colony Optimisation (ACO)."""
+    out = OUTPUT_DIR / "lines_aco.geojson"
+    if out.exists() and not force:
+        log.info("aco: cached → %s", out)
+        return
+
+    graph, positions, kde = _load_network_pickles()
+
+    demand_gdf = None
+    lodes_path = DATA_DIR / "demand_lodes.geojson"
+    if lodes_path.exists():
+        demand_gdf = load_geojson(str(lodes_path))
+        log.info("aco: loaded LODES demand (%d points)", len(demand_gdf))
+
+    log.info(
+        "aco: running ACO (ants=20, generations=30, routes=%d) …",
+        cfg.num_walks,
+    )
+    best_routes, best_score, aco_log = ant_colony_optimize(
+        graph,
+        positions,
+        kde,
+        num_routes=cfg.num_walks,
+        num_ants=20,
+        generations=30,
+        min_distance=cfg.min_distance,
+        max_distance=cfg.max_distance,
+        kde_radius=cfg.kde_radius,
+        demand_gdf=demand_gdf,
+        demand_weight=0.4,
+    )
+
+    if not best_routes:
+        log.warning("aco: no routes generated")
+        return
+
+    groups = group_assigner(best_routes, graph, positions, threshold=cfg.genetic_group_threshold)
+    status = mark_station_nodes(
+        best_routes, graph, positions,
+        min_station_dist=cfg.min_station_dist,
+        groups=groups,
+    )
+    names = assign_station_neighborhoods(positions, status, neighborhoods)
+
+    with open(PICKLE_DIR / "best_routes_aco.pkl", "wb") as f:
+        pickle.dump(best_routes, f)
+
+    save_lines_to_geojson(best_routes, graph, positions, kde, str(out), status, groups, names)
+    log.info("aco: %d lines (fitness=%.2f) → %s", len(best_routes), best_score, out)
+
+
+
+def stage_row_snap(cfg: PipelineConfig, force: bool = False) -> None:
+    """Classify ROW type for each segment in all generated line files."""
+    row_pkl = PICKLE_DIR / "row_snap.pkl"
+    if row_pkl.exists() and not force:
+        log.info("row_snap: cached → %s", row_pkl)
+        return
+
+    county_shapes, _, _ = _load_county_shapes(cfg)
+    bounds = county_shapes.to_crs(epsg=4326).total_bounds  # minx miny maxx maxy
+    south, north, west, east = bounds[1], bounds[3], bounds[0], bounds[2]
+
+    log.info("row_snap: loading/downloading OSM network …")
+    osm_network = load_or_download_osm_network(
+        study_bounds=(south, north, west, east),
+        data_dir=DATA_DIR,
+        force=force,
+    )
+
+    with open(row_pkl, "wb") as f:
+        pickle.dump(osm_network, f)
+
+    log.info("row_snap: OSM network ready (%s edges)", len(osm_network.get("edges", [])) if osm_network else 0)
+
+
+def stage_cost(cfg: PipelineConfig, force: bool = False) -> None:
+    """Estimate and attach construction costs to all generated line GeoJSONs."""
+    graph, positions, kde = _load_network_pickles()
+
+    row_pkl = PICKLE_DIR / "row_snap.pkl"
+    osm_network = None
+    if row_pkl.exists():
+        with open(row_pkl, "rb") as f:
+            osm_network = pickle.load(f)
+
+    # Build once — shared read-only across threads
+    pos_4326_to_node = {
+        tuple(round(v, 6) for v in _to_4326_tuple(positions[n])): n
+        for n in positions
+    }
+
+    def _annotate_cost(variant, src_path, dst_path):
+        if not src_path.exists():
+            return
+        if not force and _geojson_has_cost(src_path):
+            log.info("cost: %s already has cost data — skipping (use --force to recompute)", variant)
+            return
+        log.info("cost: annotating %s …", variant)
+        lines_loaded, status, groups, names_loaded = load_lines_from_geojson(str(src_path))
+        valid = [
+            [n for n in (pos_4326_to_node.get(tuple(round(c, 6) for c in node), -1) for node in line) if n != -1]
+            for line in lines_loaded
+        ]
+        segment_row_types = classify_lines_row(valid, positions, osm_network)
+        metadata = build_line_metadata(valid, positions, status, segment_row_types)
+        save_lines_to_geojson(
+            valid, graph, positions, kde, str(dst_path),
+            status, groups, names_loaded,
+            line_metadata=metadata,
+        )
+        log.info("cost: %s annotated → %s", variant, dst_path)
+
+    _cost_variants = [
+        ("naive",     OUTPUT_DIR / "lines_naive.geojson",     OUTPUT_DIR / "lines_naive.geojson"),
+        ("iterative", OUTPUT_DIR / "lines_iterative.geojson", OUTPUT_DIR / "lines_iterative.geojson"),
+        ("aco",       OUTPUT_DIR / "lines_aco.geojson",       OUTPUT_DIR / "lines_aco.geojson"),
+        ("genetic",   OUTPUT_DIR / "lines_genetic.geojson",   OUTPUT_DIR / "lines_genetic.geojson"),
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _p:
+        _futs = [_p.submit(_annotate_cost, *v) for v in _cost_variants]
+        for _f in concurrent.futures.as_completed(_futs):
+            _f.result()
+
+
+def _to_4326_tuple(xy):
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    return t.transform(*xy)
+
+
+def _geojson_has_cost(path: Path) -> bool:
+    import json
+    try:
+        with open(path) as f:
+            gj = json.load(f)
+        for feat in gj.get("features", []):
+            if feat.get("properties", {}).get("construction_cost_musd") is not None:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def stage_ridership(cfg: PipelineConfig, force: bool = False) -> None:
+    """Estimate and attach ridership to all generated line GeoJSONs."""
+    import json as _json
+    graph, positions, kde = _load_network_pickles()
+
+    demand_gdf = None
+    lodes_path = DATA_DIR / "demand_lodes.geojson"
+    if lodes_path.exists():
+        demand_gdf = load_geojson(str(lodes_path))
+    else:
+        demand_path = DATA_DIR / "demand_features.geojson"
+        if demand_path.exists():
+            demand_gdf = load_geojson(str(demand_path))
+
+    # Build once — shared read-only across threads
+    pos_4326_to_node = {
+        tuple(round(v, 6) for v in _to_4326_tuple(positions[n])): n
+        for n in positions
+    }
+
+    def _annotate_ridership(variant, src_path):
+        if not src_path.exists():
+            return
+        if not force and _geojson_has_ridership(src_path):
+            log.info("ridership: %s already has ridership data — skipping", variant)
+            return
+        log.info("ridership: estimating for %s …", variant)
+        lines_loaded, status, groups, names_loaded = load_lines_from_geojson(str(src_path))
+        valid = [
+            [n for n in (pos_4326_to_node.get(tuple(round(c, 6) for c in nd), -1) for nd in line) if n != -1]
+            for line in lines_loaded
+        ]
+        ridership = estimate_line_ridership(
+            valid, positions, status, demand_gdf,
+            catchment_radius_m=800.0,
+            daily_total_target=350_000.0,
+        )
+        with open(src_path) as _f:
+            gj = _json.load(_f)
+        line_features = [f for f in gj["features"] if f.get("properties", {}).get("type") == "line"]
+        for i, feat in enumerate(line_features):
+            if i < len(ridership):
+                feat["properties"]["ridership_estimate"] = round(ridership[i], 0)
+        with open(src_path, "w") as _f:
+            _json.dump(gj, _f)
+        log.info("ridership: %s annotated (total=%.0f/day)", variant, sum(ridership))
+
+    _ridership_variants = [
+        ("naive",     OUTPUT_DIR / "lines_naive.geojson"),
+        ("iterative", OUTPUT_DIR / "lines_iterative.geojson"),
+        ("aco",       OUTPUT_DIR / "lines_aco.geojson"),
+        ("genetic",   OUTPUT_DIR / "lines_genetic.geojson"),
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _p:
+        _futs = [_p.submit(_annotate_ridership, *v) for v in _ridership_variants]
+        for _f in concurrent.futures.as_completed(_futs):
+            _f.result()
+
+
+def _geojson_has_ridership(path: Path) -> bool:
+    import json
+    try:
+        with open(path) as f:
+            gj = json.load(f)
+        for feat in gj.get("features", []):
+            if feat.get("properties", {}).get("ridership_estimate") is not None:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def stage_evaluate(
     cfg: PipelineConfig,
     county_shapes: gpd.GeoDataFrame,
@@ -498,6 +823,7 @@ def stage_evaluate(
     for name, path in [
         ("naive", OUTPUT_DIR / "lines_naive.geojson"),
         ("iterative", OUTPUT_DIR / "lines_iterative.geojson"),
+        ("aco", OUTPUT_DIR / "lines_aco.geojson"),
         ("genetic", OUTPUT_DIR / "lines_genetic.geojson"),
     ]:
         if path.exists():
@@ -510,8 +836,7 @@ def stage_evaluate(
         "variant", "pt_cov%", "neigh_cov%",
         "avg_dist_region_m", "avg_dist_dc_m", "pop_in_catchments",
     ]
-    rows = []
-    for name, station_gdf in variants.items():
+    def _variant_metrics(name, station_gdf):
         pt_cov = station_gdf_catchment_coverage(station_gdf, df_points)
         neigh_cov = station_gdf_catchment_coverage(station_gdf, neighborhoods)
         avg_region = average_distance_to_points_within_polygon(station_gdf, region_poly)
@@ -519,14 +844,19 @@ def stage_evaluate(
         pop_cov = estimate_population_in_catchments(
             popkde, station_gdf, catchment_radius=500, grid_resolution=100
         )
-        rows.append([
+        return name, [
             name,
             f"{pt_cov:.2f}",
             f"{neigh_cov:.2f}",
             f"{avg_region:.0f}",
             f"{avg_dc:.0f}",
             f"{pop_cov:.4f}",
-        ])
+        ]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as _p:
+        _futs = [_p.submit(_variant_metrics, name, gdf) for name, gdf in variants.items()]
+        _results = {name: row for _f in concurrent.futures.as_completed(_futs) for name, row in [_f.result()]}
+    rows = [_results[name] for name in variants if name in _results]
 
     col_widths = [
         max(len(h), max(len(r[i]) for r in rows))
@@ -545,7 +875,7 @@ def stage_evaluate(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool) -> None:
+def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: int = 4) -> None:
     for stage in stages:
         if stage not in ALL_STAGES:
             log.error("Unknown stage '%s'. Choose from: %s", stage, ", ".join(ALL_STAGES))
@@ -554,20 +884,60 @@ def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool) -> None:
     county_shapes, _, _ = _load_county_shapes(cfg)
     neighborhoods = _load_neighborhoods()
 
-    stage_fns: dict = {
+    stage_fns: dict[str, object] = {
         "region": lambda: stage_region(cfg, force),
         "transit_points": lambda: stage_transit_points(cfg, county_shapes, force),
         "graph_points": lambda: stage_graph_points(cfg, force),
         "network": lambda: stage_network(cfg, force),
+        "gnn_scoring": lambda: stage_gnn_scoring(cfg, force),
+        "lodes": lambda: stage_lodes(cfg, force),
         "naive": lambda: stage_naive(cfg, neighborhoods, force),
         "iterative": lambda: stage_iterative(cfg, neighborhoods, force),
+        "aco": lambda: stage_aco(cfg, neighborhoods, force),
         "genetic": lambda: stage_genetic(cfg, neighborhoods, force),
+        "row_snap": lambda: stage_row_snap(cfg, force),
+        "cost": lambda: stage_cost(cfg, force),
+        "ridership": lambda: stage_ridership(cfg, force),
         "evaluate": lambda: stage_evaluate(cfg, county_shapes, neighborhoods),
     }
 
-    for stage in stages:
-        log.info("=== stage: %s ===", stage)
-        stage_fns[stage]()
+    stage_set = set(stages)
+    deps: dict[str, set[str]] = {
+        s: {d for d in STAGE_DEPS[s] if d in stage_set}
+        for s in stage_set
+    }
+    submitted: set[str] = set()
+    completed: set[str] = set()
+    pending: dict[concurrent.futures.Future, str] = {}
+
+    def _ready(s: str) -> bool:
+        return s not in submitted and deps[s].issubset(completed)
+
+    n_workers = min(workers, len(stages))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for s in stages:
+            if _ready(s):
+                submitted.add(s)
+                log.info("=== stage: %s [start] ===", s)
+                pending[pool.submit(stage_fns[s])] = s
+
+        while pending:
+            done, _ = concurrent.futures.wait(
+                list(pending.keys()), return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for fut in done:
+                s = pending.pop(fut)
+                exc = fut.exception()
+                if exc:
+                    log.error("stage %s failed: %s", s, exc)
+                    raise exc
+                completed.add(s)
+                log.info("=== stage: %s [done] ===", s)
+                for candidate in stages:
+                    if _ready(candidate):
+                        submitted.add(candidate)
+                        log.info("=== stage: %s [start] ===", candidate)
+                        pending[pool.submit(stage_fns[candidate])] = candidate
 
 
 def main() -> None:
@@ -593,8 +963,15 @@ def main() -> None:
         action="store_true",
         help="Bypass skip-if-exists caching and re-run each selected stage.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Maximum number of pipeline stages to run concurrently (default: 4).",
+    )
     args = parser.parse_args()
-    run_pipeline(args.stages, PipelineConfig(), args.force)
+    run_pipeline(args.stages, PipelineConfig(), args.force, workers=args.workers)
 
 
 if __name__ == "__main__":

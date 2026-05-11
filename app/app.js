@@ -48,7 +48,7 @@ let clickEndDist = 0;
 
 // Currently selected line
 let selectedLineId = null;
-let currentLinesSource = 'lines_genetic';
+let currentLinesSource = 'lines_aco';
 let realWorldNetworkLayer = null;
 
 // =============================================================================
@@ -73,7 +73,13 @@ L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.{e
 
 async function fetchGeoJSON(url) {
     const resp = await fetch(url);
-    return await resp.json();
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} loading ${url}`);
+    const text = await resp.text();
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        throw new Error(`Invalid JSON from ${url}: ${e.message}`);
+    }
 }
 
 function roundCoord(coord) {
@@ -140,6 +146,26 @@ function statusChipClass(status) {
     return { ok: 'ok', warn: 'warn', alert: 'alert' }[status] || 'muted';
 }
 
+const ROW_TYPE_LABELS = {
+    subway_tunnel:  { label: 'Subway/Tunnel',      color: '#1e3a5f' },
+    subway_surface: { label: 'At-grade Rail ROW',  color: '#2563eb' },
+    rail_existing:  { label: 'Existing Rail ROW',  color: '#7c3aed' },
+    elevated:       { label: 'Elevated',            color: '#d97706' },
+    street:         { label: 'Street Running',      color: '#4b5563' },
+    unknown:        { label: 'Unknown ROW',         color: '#9ca3af' },
+};
+
+function buildCrowdingCars(occupancyPct) {
+    if (occupancyPct === null) return '';
+    const numCars = 8; // WMATA 8-car trains
+    const filled = Math.round((occupancyPct / 100) * numCars);
+    const cls = occupancyPct >= 80 ? 'alert' : occupancyPct >= 60 ? 'warn' : 'ok';
+    const cars = Array.from({ length: numCars }, (_, i) =>
+        `<span class="car-icon ${i < filled ? cls : 'empty'}">▬</span>`
+    ).join('');
+    return `<span class="cars-row" title="${occupancyPct}% occupancy (${filled}/${numCars} cars)">${cars}</span>`;
+}
+
 function buildOperationalChips(meta) {
     const crowdingClass =
         meta.occupancyPct !== null && meta.occupancyPct >= 80 ? 'alert'
@@ -154,16 +180,34 @@ function buildOperationalChips(meta) {
         : meta.isAccessible === true ? 'ok'
         : 'muted';
 
+    const rowInfo = ROW_TYPE_LABELS[meta.rowType] || ROW_TYPE_LABELS['unknown'];
+    const rowChip = `<span class="chip row-chip" style="background:${rowInfo.color};color:#fff;border-color:${rowInfo.color}">${escapeHtml(rowInfo.label)}</span>`;
+
+    const accessIcon = meta.isAccessible === false ? '♿✗' : meta.isAccessible === true ? '♿' : '♿?';
+    const accessLabel = meta.isAccessible === false ? 'Not accessible' : meta.isAccessible === true ? 'Accessible (ADA)' : 'Accessibility unknown';
+
+    const crowdingCars = buildCrowdingCars(meta.occupancyPct);
+
     return [
         `<span class="chip muted">${escapeHtml(meta.routeKind)}</span>`,
-        `<span class="chip muted">${escapeHtml(meta.serviceStatus)}</span>`,
-        `<span class="chip ${statusChipClass(crowdingClass)}">Crowding ${escapeHtml(formatPercent(meta.occupancyPct))}</span>`,
-        `<span class="chip ${statusChipClass(delayClass)}">Delay ${escapeHtml(formatMinutes(meta.delayMin))}</span>`,
-        `<span class="chip ${statusChipClass(accessClass)}">${meta.isAccessible === false ? 'Not accessible' : meta.isAccessible === true ? 'Accessible' : 'Accessibility N/A'}</span>`,
-        `<span class="chip muted">ROW ${escapeHtml(meta.rowType)}</span>`,
-        meta.constructionCostMusd !== null ? `<span class="chip muted">Cost ${escapeHtml(formatDollars(meta.constructionCostMusd))}</span>` : '',
-        meta.ridershipEstimate !== null ? `<span class="chip muted">Ridership ${escapeHtml(meta.ridershipEstimate.toFixed(0))}</span>` : '',
-    ].join(' ');
+        `<span class="chip ${meta.serviceStatus === 'planned' ? 'planned-chip' : 'muted'}">${escapeHtml(meta.serviceStatus)}</span>`,
+        meta.occupancyPct !== null
+            ? `<span class="chip ${statusChipClass(crowdingClass)}" title="${meta.occupancyPct}% occupancy">
+                ${crowdingCars} ${escapeHtml(formatPercent(meta.occupancyPct))}
+               </span>`
+            : '<span class="chip muted">Crowding N/A</span>',
+        meta.delayMin !== null
+            ? `<span class="chip ${statusChipClass(delayClass)}">⏱ ${escapeHtml(formatMinutes(meta.delayMin))} delay</span>`
+            : '<span class="chip muted">No delay data</span>',
+        `<span class="chip ${statusChipClass(accessClass)}" title="${accessLabel}">${accessIcon}</span>`,
+        rowChip,
+        meta.constructionCostMusd !== null
+            ? `<span class="chip cost-chip" title="Estimated construction cost">🏗 ${escapeHtml(formatDollars(meta.constructionCostMusd))}</span>`
+            : '',
+        meta.ridershipEstimate !== null
+            ? `<span class="chip ridership-chip" title="Estimated daily boardings">🚇 ${escapeHtml(Number(meta.ridershipEstimate).toLocaleString())} riders/day</span>`
+            : '',
+    ].filter(Boolean).join(' ');
 }
 
 function renderTransitOperationsPanel(features) {
@@ -179,15 +223,24 @@ function renderTransitOperationsPanel(features) {
         planned: lines.filter(m => m.serviceStatus === 'planned').length,
     };
 
+    const totalRidership = lines.reduce((s, m) => s + (m.ridershipEstimate || 0), 0);
+    const totalCost = lines.reduce((s, m) => s + (m.constructionCostMusd || 0), 0);
+    const rowBreakdown = {};
+    lines.forEach(m => { rowBreakdown[m.rowType] = (rowBreakdown[m.rowType] || 0) + 1; });
+    const dominantRow = Object.entries(rowBreakdown).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+
     summaryPanel.innerHTML = [
         { label: 'Loaded lines', value: lines.length, note: 'Current network layers' },
+        { label: 'Est. daily riders', value: totalRidership > 0 ? totalRidership.toLocaleString() : 'N/A', note: 'Gravity model estimate' },
+        { label: 'Est. network cost', value: totalCost > 0 ? `$${Math.round(totalCost).toLocaleString()}M` : 'N/A', note: 'USD 2023, with contingency' },
+        { label: 'Dominant ROW', value: (ROW_TYPE_LABELS[dominantRow] || ROW_TYPE_LABELS['unknown']).label, note: 'Most common right-of-way' },
         { label: 'Crowding data', value: counts.crowding, note: 'Lines with occupancy info' },
         { label: 'Delay data', value: counts.delay, note: 'Lines with delay tracking' },
-        { label: 'Accessibility data', value: counts.accessible, note: 'Lines with access flags' },
+        { label: 'Accessible', value: lines.filter(m => m.isAccessible !== false).length, note: 'Lines not flagged inaccessible' },
     ].map(c => `
         <div class="metric-card">
             <span class="metric-label">${escapeHtml(c.label)}</span>
-            <div class="metric-value">${escapeHtml(c.value)}</div>
+            <div class="metric-value">${escapeHtml(String(c.value))}</div>
             <div class="metric-note">${escapeHtml(c.note)}</div>
         </div>`).join('');
 
@@ -213,18 +266,51 @@ function renderTransitOperationsPanel(features) {
     }
 }
 
+function buildHourlySparkline(ridershipPerDay) {
+    if (!ridershipPerDay) return '';
+    // WMATA time-of-day profile shares (hours 5-24)
+    const profile = {
+        5:0.02, 6:0.02, 7:0.13, 8:0.13, 9:0.043, 10:0.043, 11:0.043,
+        12:0.043, 13:0.043, 14:0.043, 15:0.043, 16:0.09, 17:0.09,
+        18:0.09, 19:0.028, 20:0.028, 21:0.028, 22:0.028, 23:0.01, 24:0.01,
+    };
+    const peakHours = new Set([7, 8, 16, 17, 18]);
+    const bars = Object.entries(profile).map(([h, share]) => {
+        const boardings = Math.round(ridershipPerDay * share);
+        const pct = share / 0.13 * 100; // normalise to max (AM peak)
+        const cls = peakHours.has(Number(h)) ? 'peak' : 'off';
+        return `<div class="ridership-sparkline-bar ${cls}" style="height:${Math.max(pct, 4)}%" title="${h}:00 — ${boardings.toLocaleString()} boardings"></div>`;
+    }).join('');
+    return `
+        <div style="margin-top:0.75rem">
+            <span class="metric-label">Hourly ridership profile</span>
+            <div class="ridership-sparkline">${bars}</div>
+            <div class="ridership-sparkline-label"><span>5am</span><span>Noon</span><span>Midnight</span></div>
+        </div>`;
+}
+
 function renderSelectedLineDetails(props) {
     if (!selectedLineDetails || !props) return;
     const meta = normalizeLineMetadata(props);
     selectedLineId = meta.lineId;
+
+    const costStr = meta.constructionCostMusd !== null
+        ? `<span class="chip cost-chip">🏗 $${Number(meta.constructionCostMusd).toLocaleString()}M construction</span>`
+        : '';
+    const riderStr = meta.ridershipEstimate !== null
+        ? `<span class="chip ridership-chip">🚇 ${Number(meta.ridershipEstimate).toLocaleString()} riders/day</span>`
+        : '';
+
     selectedLineDetails.innerHTML = `
         <div class="line-detail-row">
             <div>
                 <div class="line-detail-title">${escapeHtml(meta.name)}</div>
                 <div class="line-detail-meta">Selected line · ${escapeHtml(meta.routeKind)} · ${escapeHtml(meta.serviceStatus)}</div>
+                <div class="line-cost-row">${costStr}${riderStr}</div>
             </div>
             <div>${buildOperationalChips(meta)}</div>
-        </div>`;
+        </div>
+        ${buildHourlySparkline(meta.ridershipEstimate)}`;
 }
 
 function summarizeRouteOperations(lineSequence) {
@@ -259,6 +345,8 @@ fetchGeoJSON('../data/output/network.geojson').then(data => {
     });
     layers['Network'] = networkLayer;
     layerOrder.push('Network');
+}).catch(err => {
+    console.warn('network.geojson unavailable; network overlay disabled.', err.message);
 });
 
 // =============================================================================
@@ -345,6 +433,7 @@ function loadLinesGeoJSON(source) {
     Object.keys(lineIdByNodePair).forEach(k => delete lineIdByNodePair[k]);
     selectedLineId = null;
     linesGraph = null;
+    lineLayerNames.length = 0;
 
     catchmentCircles.forEach(c => { if (map.hasLayer(c)) map.removeLayer(c); });
     catchmentCircles.length = 0;
@@ -357,7 +446,16 @@ function loadLinesGeoJSON(source) {
     });
     currentLinesLayerNames.length = 0;
 
-    fetchGeoJSON(`../data/output/${source}.geojson`).then(data => {
+    fetchGeoJSON(`../data/output/${source}.geojson`).catch(err => {
+        console.error(`Failed to load ${source}.geojson:`, err.message);
+        const summaryEl = document.getElementById('transit-ops-summary');
+        if (summaryEl) summaryEl.innerHTML =
+            `<div class="metric-card"><span class="metric-label">Load error</span>` +
+            `<div class="metric-value">Not found</div>` +
+            `<div class="metric-note">${escapeHtml(source)}.geojson is missing. Run the pipeline to generate it.</div></div>`;
+        return null;
+    }).then(data => {
+        if (!data) return;
         const features = data.features || [];
         linesGraph = { nodes: {}, edges: {} };
 
@@ -393,9 +491,14 @@ function loadLinesGeoJSON(source) {
                 if (!segmentToLines[segKey]) segmentToLines[segKey] = new Set();
                 segmentToLines[segKey].add(lineId);
 
-                const ka = [coords[i][1], coords[i][0]].join(',');
-                const kb = [coords[i + 1][1], coords[i + 1][0]].join(',');
-                const dist = L.latLng(...linesGraph.nodes[ka]).distanceTo(L.latLng(...linesGraph.nodes[kb]));
+                // Use the same roundCoord key format as linesGraph.nodes so that
+                // edge lookups (graph.edges[u]) match during Dijkstra traversal.
+                const ka = roundCoord(coords[i]).join(',');
+                const kb = roundCoord(coords[i + 1]).join(',');
+                const nodeA = linesGraph.nodes[ka];
+                const nodeB = linesGraph.nodes[kb];
+                if (!nodeA || !nodeB) continue;
+                const dist = L.latLng(...nodeA).distanceTo(L.latLng(...nodeB));
                 if (!linesGraph.edges[ka]) linesGraph.edges[ka] = [];
                 if (!linesGraph.edges[kb]) linesGraph.edges[kb] = [];
                 linesGraph.edges[ka].push({ to: kb, dist, lineId });
@@ -424,6 +527,10 @@ function loadLinesGeoJSON(source) {
             const firstStation = nameList.find(n => n) || 'Unnamed station';
             const lastStation = [...nameList].reverse().find(n => n) || 'Unnamed station';
             const stationCount = (f.properties.is_station || []).filter(Boolean).length;
+            const ridership = f.properties.ridership_estimate;
+            const cost = f.properties.construction_cost_musd;
+            const rowType = f.properties.row_type || 'unknown';
+            const rowLabel = (ROW_TYPE_LABELS[rowType] || ROW_TYPE_LABELS['unknown']).label;
 
             const poly = L.polyline(latlngs, { color, weight: 4, opacity: 1 }).addTo(map);
             poly._originalCoords = coords;
@@ -431,11 +538,15 @@ function loadLinesGeoJSON(source) {
             poly._segmentToLines = segmentToLines;
             poly._groupMap = groupMap;
 
-            poly.bindTooltip(
-                `<b>Line ${f.properties.line_id} (${firstStation.replace(/ \d+$/, '')} – ${lastStation.replace(/ \d+$/, '')})</b><br>` +
-                `Total distance: ${(totalDistance / 1000).toFixed(2)} km<br>Stations: ${stationCount}`,
-                { sticky: true, direction: 'top', offset: [0, -10] }
-            );
+            const tooltipLines = [
+                `<b>Line ${f.properties.line_id} (${firstStation.replace(/ \d+$/, '')} – ${lastStation.replace(/ \d+$/, '')})</b>`,
+                `Distance: ${(totalDistance / 1000).toFixed(1)} km · Stations: ${stationCount}`,
+                `ROW: ${escapeHtml(rowLabel)}`,
+                cost !== null && cost !== undefined ? `Cost: $${Number(cost).toFixed(0)}M` : null,
+                ridership !== null && ridership !== undefined ? `Ridership: ${Number(ridership).toLocaleString()}/day` : null,
+            ].filter(Boolean).join('<br>');
+
+            poly.bindTooltip(tooltipLines, { sticky: true, direction: 'top', offset: [0, -10] });
 
             poly.on('mouseover', function () {
                 this.setStyle({ weight: 7, opacity: 1 });
@@ -472,8 +583,20 @@ function loadLinesGeoJSON(source) {
                     icon: L.icon({ iconUrl: 'assets/wmata.svg', iconSize: [14, 14], iconAnchor: [7, 7], popupAnchor: [0, -7] }),
                 }).addTo(map);
 
+                // Per-station ridership (apportioned from line estimate)
+                const stationRidership = ridership !== null && ridership !== undefined
+                    ? Math.round(Number(ridership) / Math.max(stationCount, 1))
+                    : null;
+                const linesMeta = linesHere.map(lid => lineMetadataById[lid]).filter(Boolean);
+                const isAccessible = linesMeta.some(m => m.isAccessible !== false);
+                const accessLabel = isAccessible ? '♿ Accessible' : '♿✗ Check accessibility';
+
                 marker.bindTooltip(
-                    `<b>${stationName}</b><br>KDE Score: ${kde?.toFixed(2) ?? 'N/A'}<br>Lines: ${linesHere.map(l => `Line ${l}`).join(', ')}`,
+                    `<b>${stationName}</b><br>` +
+                    `Lines: ${linesHere.map(l => `Line ${l}`).join(', ')}<br>` +
+                    (stationRidership !== null ? `Est. boardings: ${stationRidership.toLocaleString()}/day<br>` : '') +
+                    `${accessLabel}<br>` +
+                    `KDE: ${kde?.toFixed(2) ?? 'N/A'}`,
                     { direction: 'top', offset: [0, -10], sticky: false }
                 );
                 attachRouteFinderToMarker(marker, coord[1], coord[0], stationName);
@@ -537,19 +660,22 @@ function loadRealWorldNetwork() {
         map.removeLayer(realWorldNetworkLayer);
         realWorldNetworkLayer = null;
     }
-    Promise.all(REAL_WORLD_SOURCES.map(f => fetchGeoJSON(f.url).then(data => ({ ...f, data }))))
-        .then(results => {
-            const group = L.layerGroup();
-            results.forEach(f => {
-                const colorFn = f.colorFn || (() => f.color);
-                group.addLayer(L.geoJSON(f.data, {
-                    style: feature => ({ color: colorFn(feature.properties), weight: 2, opacity: 1, dashArray: '2 2' }),
-                }));
-            });
-            realWorldNetworkLayer = group;
-            const cb = document.getElementById('layer-toggle-RealWorldNetwork');
-            if (cb?.checked) realWorldNetworkLayer.addTo(map);
+    Promise.all(REAL_WORLD_SOURCES.map(src =>
+        fetchGeoJSON(src.url)
+            .then(data => ({ ...src, data }))
+            .catch(err => { console.warn(`Could not load ${src.name}:`, err.message); return null; })
+    )).then(results => {
+        const group = L.layerGroup();
+        results.filter(Boolean).forEach(src => {
+            const colorFn = src.colorFn || (() => src.color);
+            group.addLayer(L.geoJSON(src.data, {
+                style: feature => ({ color: colorFn(feature.properties), weight: 2, opacity: 1, dashArray: '2 2' }),
+            }));
         });
+        realWorldNetworkLayer = group;
+        const cb = document.getElementById('layer-toggle-RealWorldNetwork');
+        if (cb?.checked) realWorldNetworkLayer.addTo(map);
+    });
 }
 
 // =============================================================================
@@ -707,9 +833,10 @@ catchmentToggleLabel.appendChild(document.createTextNode(' Station catchment are
 const linesSourceSelect = document.createElement('select');
 linesSourceSelect.id = 'lines-source-select';
 [
-    ['lines_iterative', 'Naive Algorithm with Iterative Improvement'],
-    ['lines_genetic', 'Genetic Algorithm'],
-    ['lines_naive', 'Naive Algorithm'],
+    ['lines_aco',       'Ant Colony Optimisation (ACO)'],
+    ['lines_genetic',   'Genetic Algorithm'],
+    ['lines_iterative', 'Naive + Iterative Improvement'],
+    ['lines_naive',     'Naive Algorithm'],
 ].forEach(([value, label]) => {
     const opt = document.createElement('option');
     opt.value = value;
@@ -913,7 +1040,7 @@ function executeRoute(path, transitDistance) {
         exitBtn.onclick = exitRouteFinder;
     }
 
-    routeFinderBtn.textContent = 'clear';
+    routeFinderBtn.textContent = 'New route';
     routeFinderState = 'results';
     renderLayerToggles();
 }
@@ -950,15 +1077,18 @@ function clearRouteSelectionVisuals() {
 }
 
 function startRouteFinder() {
+    if (!linesGraph || Object.keys(linesGraph.nodes).length === 0) {
+        routeFinderStatus.textContent = 'No transit network loaded yet.';
+        return;
+    }
     routeFinderState = 'selectingStart';
     routeStart = routeEnd = null;
     if (routeHighlightLayer) { map.removeLayer(routeHighlightLayer); routeHighlightLayer = null; }
     routeNodeMarkers.forEach(m => map.removeLayer(m));
     routeNodeMarkers = [];
-    routeFinderStatus.textContent = 'Click the starting location.';
+    routeFinderStatus.textContent = 'Click the starting location on the map or a station marker.';
     routeFinderResult.textContent = '';
-    routeFinderBtn.textContent = 'clear';
-    routeFinderBtn.disabled = true;
+    routeFinderBtn.textContent = 'Cancel';
     document.getElementById('route-finder-exit-btn')?.remove();
     clearRouteSelectionVisuals();
 }
@@ -975,8 +1105,7 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
             routeFinderBtn.dataset.originStation = stationName || '';
             routeFinderStatus.innerHTML = `<b>Origin:</b> ${escapeHtml(stationName || '')}<br>Click the destination.`;
             routeNodeMarkers.push(L.circleMarker([lat, lng], { radius: 12, color: 'green', fillOpacity: 0.7 }).addTo(map));
-            routeFinderBtn.textContent = 'clear';
-            routeFinderBtn.disabled = false;
+            routeFinderBtn.textContent = 'Cancel';
             renderLayerToggles();
 
         } else if (routeFinderState === 'selectingEnd') {
@@ -1021,8 +1150,7 @@ map.on('click', function (e) {
         routeFinderState = 'selectingEnd';
         routeFinderStatus.textContent = 'Click the destination.';
         routeNodeMarkers.push(L.circleMarker(nearestCoord, { radius: 12, color: 'green', fillOpacity: 0.7 }).addTo(map));
-        routeFinderBtn.textContent = 'clear';
-        routeFinderBtn.disabled = false;
+        routeFinderBtn.textContent = 'Cancel';
         renderLayerToggles();
 
     } else if (routeFinderState === 'selectingEnd') {

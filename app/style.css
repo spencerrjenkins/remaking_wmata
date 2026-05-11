@@ -6,6 +6,24 @@ body {
     color: #1f2937;
 }
 
+.app-header {
+    max-width: 90em;
+    margin: 0 auto;
+    padding: 1rem 1.1rem 0.5rem;
+}
+
+.app-header h1 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.5rem;
+    color: #0f172a;
+}
+
+.app-header p {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    color: #475569;
+}
+
 #map {
     width: 98vw;
     height: 69vh;
@@ -87,7 +105,7 @@ body {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.75rem;
     align-items: center;
     padding: 0.85rem 0.95rem;
     border-radius: 12px;
@@ -180,4 +198,121 @@ body {
     overflow-y: visible;
     max-width: 100vw;
     box-sizing: border-box;
+}
+
+/* ── Car-level crowding visualisation ────────────────────────────────────── */
+
+.cars-row {
+    display: inline-flex;
+    gap: 2px;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+.car-icon {
+    font-size: 0.85rem;
+    letter-spacing: -1px;
+    line-height: 1;
+}
+
+.car-icon.ok    { color: #16a34a; }
+.car-icon.warn  { color: #ea580c; }
+.car-icon.alert { color: #dc2626; }
+.car-icon.empty { color: #cbd5e1; }
+
+/* ── ROW type chips ──────────────────────────────────────────────────────── */
+
+.chip.row-chip {
+    font-weight: 700;
+    border: 1px solid transparent;
+}
+
+/* ── Status chips ────────────────────────────────────────────────────────── */
+
+.chip.planned-chip {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+.chip.cost-chip {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.chip.ridership-chip {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+/* ── Accessibility icon ──────────────────────────────────────────────────── */
+
+.chip .access-icon {
+    font-size: 1rem;
+}
+
+/* ── Hourly ridership sparkline ──────────────────────────────────────────── */
+
+.ridership-sparkline {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 36px;
+    margin-top: 0.5rem;
+}
+
+.ridership-sparkline-bar {
+    flex: 1;
+    background: #3b82f6;
+    border-radius: 2px 2px 0 0;
+    min-height: 2px;
+    position: relative;
+}
+
+.ridership-sparkline-bar.peak { background: #1d4ed8; }
+.ridership-sparkline-bar.off  { background: #93c5fd; }
+
+.ridership-sparkline-label {
+    font-size: 0.68rem;
+    color: #64748b;
+    margin-top: 0.2rem;
+    display: flex;
+    justify-content: space-between;
+}
+
+/* ── Line detail enhancements ────────────────────────────────────────────── */
+
+.line-cost-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 0.85rem;
+    color: #475569;
+    margin-top: 0.35rem;
+}
+
+/* ── Real-world line legend ──────────────────────────────────────────────── */
+
+.rw-legend-dot {
+    display: inline-block;
+    width: 14px;
+    height: 5px;
+    border-radius: 3px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+/* ── Constraints layer ───────────────────────────────────────────────────── */
+
+.constraint-chip {
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+}
+
+/* ── Responsive tweaks ───────────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+    #map { height: 55vh; }
+    .metric-grid { grid-template-columns: repeat(2, 1fr); }
 }

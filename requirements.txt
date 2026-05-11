@@ -11,4 +11,9 @@ seaborn
 scikit-learn
 scipy
 geojson
-
+pyproj
+pandas
+osmnx
+# optional: deep learning node scoring (GAT)
+# torch
+# torch-geometric
