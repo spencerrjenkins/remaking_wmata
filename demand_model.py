@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-from funcs import compute_transit_potential
+from core.spatial import compute_transit_potential
 from census_api import (
     ACS_TRACT_VARIABLES,
     fetch_acs_tract_table,

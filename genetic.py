@@ -2,7 +2,8 @@ import random
 import numpy as np
 from collections import Counter, defaultdict
 from copy import deepcopy
-from funcs import perform_walks, score_walk_by_kde, score_walk_by_demand
+from core.walks import perform_walks
+from core.scoring import score_walk_by_kde, score_walk_by_demand
 import multiprocessing
 import pickle
 from geo_constraints import is_point_feasible

@@ -208,6 +208,28 @@ def load_arcgis_source(
     return gdf
 
 
+def get_data(
+    url: str,
+    name: str,
+    state: str = "dc",
+    category: str = "poi",
+    geometry_hint: str = "auto",
+) -> gpd.GeoDataFrame:
+    """Convenience wrapper: fetch a single ArcGIS source by URL."""
+    spec = SourceSpec(
+        name=name,
+        url=url,
+        state=state,
+        category=category,
+        geometry_hint=geometry_hint,
+    )
+    try:
+        return load_arcgis_source(spec)
+    except Exception as exc:
+        print(f"Error fetching {name}: {exc}")
+        return gpd.GeoDataFrame()
+
+
 def build_data_catalog(
     manifest_path: Optional[str | Path] = None,
     strict: bool = False,

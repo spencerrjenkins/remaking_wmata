@@ -2,154 +2,368 @@
 
 ## Overview
 
-This project presents a computational framework for designing a reimagined rapid transit network for the Washington, DC metropolitan area. Motivated by the historical context and limitations of the existing WMATA system, the study leverages geospatial analysis, graph algorithms, and data visualization to generate and evaluate alternative transit networks. The resulting networks outperform the real-world WMATA network on key metrics, demonstrating the potential of algorithmic approaches to improve urban mobility and equity.
+This project presents a computational framework for designing a reimagined rapid transit network for the Washington, DC metropolitan area. It uses geospatial analysis, graph algorithms, and data visualization to generate and evaluate alternative transit networks. The resulting networks outperform the real-world WMATA network on key coverage and accessibility metrics.
+
+---
 
 ## Table of Contents
 
-1. [Introduction](#introduction)
-2. [Data Sources](#data-sources)
-3. [Data Processing and Transformation](#data-processing-and-transformation)
-4. [Feature Engineering](#feature-engineering)
-5. [Spatial Analysis](#spatial-analysis)
-6. [Graph and Network Modeling](#graph-and-network-modeling)
-7. [Network Generation Algorithms](#network-generation-algorithms)
-8. [Visualization](#visualization)
+1. [Repository Layout](#repository-layout)
+2. [Setup](#setup)
+3. [Required Data](#required-data)
+4. [Running the Pipeline](#running-the-pipeline)
+5. [Running the Genetic Algorithm](#running-the-genetic-algorithm)
+6. [The Web Viewer](#the-web-viewer)
+7. [Supporting Scripts](#supporting-scripts)
+8. [Technical Background](#technical-background)
 9. [Results & Discussion](#results--discussion)
 10. [Limitations](#limitations)
-11. [Implications for Urban Transit Planning](#implications-for-urban-transit-planning)
-12. [Future Work](#future-work)
-13. [References](#references)
+11. [References](#references)
 
 ---
 
-## Introduction
+## Repository Layout
 
-Public transportation is a vital component of urban infrastructure, contributing to economic productivity [1], social equity [2], and environmental sustainability [1]. The Washington, DC region comprises the second-largest rapid transit network in the United States by daily ridership [3]. However, the WMATA network has struggled to reduce car dependency, with only about 14% of commuters using transit [4]. Historical planning priorities, a radial network design, and limited suburb-to-suburb connectivity have left many high-density and marginalized areas underserved [5][2][6].
-
-This project aims to address these challenges by combining computational and geospatial techniques to generate, evaluate, and visualize alternative transit networks for the Washington, DC region.
-
-## Data Sources
-
-- **US Census Bureau**: Census block shapefiles and population data [7].
-- **Open Data DC/MD/VA**: Points of interest, land use, and neighborhood boundaries [8].
-- **WMATA**: Existing transit network shapefiles [3].
-- **Other**: Neighborhood centroids, real transit shapefiles (MARC, VRE, DC Streetcar, Purple Line), and additional open data.
-
-## Data Processing and Transformation
-
-- **Geospatial Loading**: Data is loaded and filtered using GeoPandas.
-- **Preprocessing**: Selection of specific counties and county-equivalents, as listed in the manuscript.
-- **Population and Land Area**: Used to compute "transit potential" for each block.
-- **Unified GeoDataFrame**: All relevant geospatial data is merged for analysis.
-
-## Feature Engineering
-
-- **Transit Potential**: Calculated as population divided by area, then log-transformed.
-- **Point Extraction**: Population-based points (census block centroids) are combined with non-population points (e.g., schools, hospitals) and deduplicated.
-
-## Spatial Analysis
-
-- **Kernel Density Estimation (KDE)**: Used to estimate transit demand hotspots and provide scores for spatial queries.
-- **Spatial Graph Construction**: Gabriel graph connects mutually closest points, forming a proximity network suitable for transit planning.
-- **Community Contraction**: Louvain community detection is used to contract the graph and reduce complexity.
-
-## Graph and Network Modeling
-
-- **Graph Construction**: The spatial graph is built from candidate points and contracted using Louvain communities.
-- **Edge Weights**: Assigned based on Euclidean distance.
-- **Minimum Spanning Tree (MST)**: Used for further reduction and analysis.
-
-## Network Generation Algorithms
-
-Three main algorithms are used to generate candidate transit networks:
-
-### 1. Naive (Random Walk) Algorithm
-
-- Constrained walks through the graph, selecting edges based on angle and KDE score.
-- Walks are kept if within a specified length range.
-- Edges can be traversed up to three times, reflecting real-world interlining.
-
-### 2. Iterative Improvement Algorithm
-
-- Initializes a set of random walks.
-- Walks are scored by the sum of KDE scores for all nodes.
-- The lowest-scoring walk is iteratively replaced with a higher-scoring walk.
-
-### 3. Genetic Algorithm (GA)
-
-- Population-based metaheuristic inspired by natural selection.
-- Each individual represents a candidate network (20 lines, population size 100).
-- Fitness function balances demand capture, coverage, pattern bonus, redundancy penalty, load penalty, and diversity penalty.
-- Crossover and mutation operators generate new candidate networks.
-- Runs for 30 generations with elitism and multiprocessing.
-
-#### Pseudocode Example: Recursive Spatial Decomposition
-
-```python
-Function GetPoints(DataFrame D, Box E, Integer L):
-    if L <= 0 or len(D) < 2:
-        return []
-    D_sorted = D.sort_values('point_likelihood', ascending=False)
-    P = D_sorted.iloc[1]
-    IDs = [P.SID]
-    # Define sub-boxes and recursively collect points
-    ...
-    return IDs + GetPoints(D_BL, E_BL, L-1) + ...
+```text
+remaking_wmata/
+├── core/                        # Core library (spatial, graph, scoring, walks, etc.)
+│   ├── spatial.py               # Haversine, transit potential, polygon ops
+│   ├── graph.py                 # Gabriel graph, Louvain contraction, edge weights
+│   ├── scoring.py               # KDE scoring, demand estimation
+│   ├── walks.py                 # Angle-constrained random walk generation
+│   ├── stations.py              # Station marking, neighborhood assignment, catchment
+│   ├── io.py                    # GeoJSON / shapefile load/save
+│   └── viz.py                   # Matplotlib network and walk plotting
+│
+├── pipeline.py                  # End-to-end pipeline (replaces eda.ipynb)
+├── genetic.py                   # Genetic algorithm optimizer (run separately)
+├── runner.sh                    # Remote runner: git pull → activate venv → genetic.py
+│
+├── geo_constraints.py           # No-go zone definitions (White House, Capitol)
+├── transit_data.py              # ArcGIS source loading + data catalog builder
+├── demand_model.py              # Multi-factor demand scoring (population, POI, ACS equity)
+├── data_cleaning.py             # Source normalization and deduplication utilities
+├── census_api.py                # US Census ACS 5-year API client
+│
+├── build_non_population_points.py  # CLI: fetch and combine POI layers per state
+├── build_acs_features.py           # CLI: fetch ACS tract data to CSV
+├── build_demand_features.py        # CLI: score blocks/areas by demand
+├── build_data_catalog.py           # CLI: validate and catalog all transit sources
+├── geojson_converter.py            # CLI: reproject a GeoJSON file between CRS
+├── funcs.py                        # Backward-compat re-export shim (for eda.ipynb)
+│
+├── app/
+│   ├── index.html               # Web viewer entry point
+│   ├── app.js                   # Leaflet map, route finder, layer toggles (~1100 lines)
+│   └── style.css                # All viewer styles
+│
+├── data/
+│   ├── state_and_county_fips_master.csv
+│   ├── counties/                # TIGER county boundary shapefile
+│   ├── dc/, md/, va/            # Census block shapefiles + non-population-points/
+│   ├── neighborhoods/           # Neighborhood boundary/centroid GeoJSONs
+│   ├── real_transit/            # Existing network shapefiles (WMATA, MARC, VRE, …)
+│   └── output/                  # Generated networks (lines_naive/iterative/genetic.geojson)
+│
+├── pickle/                      # Intermediate pickled graph/KDE/results
+├── data_manifest.json           # ArcGIS source list for build_non_population_points
+└── report/sample-manuscript.tex # Academic manuscript
 ```
 
-## Visualization
+---
 
-- **Transit Network Viewer**: Interactive web application for visualizing and exploring generated networks ([Transit Network Viewer](https://spencerrjenkins.github.io/remaking_wmata/app)).
-- **Maps and Plots**: KDE heatmaps, network overlays, Voronoi polygons, and catchment areas.
-- **Route Finder**: Calculates travel times using Dijkstra's algorithm, including walking and transfer penalties.
+## Setup
+
+**Python 3.9+ is required.**
+
+```bash
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+The project also requires [GDAL / Fiona](https://fiona.readthedocs.io/) for shapefile support. On macOS:
+
+```bash
+brew install gdal
+pip install fiona geopandas
+```
+
+---
+
+## Required Data
+
+The following files must be present before running the pipeline. Files that are too large to commit are noted with their source.
+
+### Census block shapefiles (TIGER)
+
+Download from [census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) (2023 vintage, tabblock20 layer):
+
+| File | Source |
+| --- | --- |
+| `data/md/tl_2023_24_tabblock20.shp` (+ sidecar files) | TIGER MD tabblock20 |
+| `data/va/tl_2023_51_tabblock20.shp` (+ sidecar files) | TIGER VA tabblock20 |
+| `data/dc/tl_2023_11_tabblock20.shp` (+ sidecar files) | TIGER DC tabblock20 |
+| `data/counties/c_18mr25.shp` (+ sidecar files) | TIGER US County boundaries |
+
+### Neighborhood boundaries
+
+Included in the repo under `data/neighborhoods/`:
+
+- `Arlington_Neighborhoods_Program_Areas.geojson`
+- `Maryland_Census_Designated_Areas_-_Census_Designated_Places_2020.geojson`
+- `neighborhood-names-centroid.geojson` (DC)
+
+### Existing transit network
+
+Included under `data/real_transit/` (WMATA, MARC, VRE, DC Streetcar, Purple Line, bus stops).
+
+### POI (non-population points)
+
+These are built by `build_non_population_points.py` from live ArcGIS endpoints (see [Supporting Scripts](#supporting-scripts)). The combined output files must exist at:
+
+- `data/dc/non-population-points/combined_df.geojson`
+- `data/md/non-population-points/combined_df.geojson`
+- `data/va/non-population-points/combined_df.geojson`
+
+---
+
+## Running the Pipeline
+
+`pipeline.py` is the main entry point. It replaces `eda.ipynb` with a clean, modular, cached pipeline.
+
+### Run all stages
+
+```bash
+python pipeline.py
+```
+
+Each stage caches its output and skips itself on subsequent runs if the output file already exists.
+
+### Run specific stages
+
+```bash
+python pipeline.py --stages region transit_points graph_points
+python pipeline.py --stages network
+python pipeline.py --stages naive iterative
+python pipeline.py --stages evaluate
+```
+
+### Force re-run (bypass cache)
+
+```bash
+python pipeline.py --stages network --force
+python pipeline.py --force        # re-run everything
+```
+
+### Stages in order
+
+| Stage | Input | Output | Notes |
+| --- | --- | --- | --- |
+| `region` | TIGER shapefiles | `data/complete_region_df.geojson`, `data/ex_map*.npy` | Slow (~5 min, large shapefiles) |
+| `transit_points` | `data/real_transit/**` | `data/transit.geojson` | |
+| `graph_points` | region + POIs + transit | `data/complete_points.geojson` | Requires `region` + POI files |
+| `network` | complete_points | `pickle/{graph,positions,kde}.pkl`, `data/output/network.geojson` | Very slow (Gabriel graph + KDE) |
+| `naive` | pickles | `data/output/lines_naive.geojson` | |
+| `iterative` | pickles | `data/output/lines_iterative.geojson` | ~100 improvement iterations |
+| `genetic` | pickles + `pickle/best_routes.pkl` | `data/output/lines_genetic.geojson` | Requires `genetic.py` first |
+| `evaluate` | all outputs | stdout metrics table | |
+
+---
+
+## Running the Genetic Algorithm
+
+The genetic algorithm is compute-intensive and is designed to run separately (e.g. on a remote server), with the results fetched back and post-processed by the `genetic` pipeline stage.
+
+### Locally
+
+```bash
+source venv/bin/activate
+python genetic.py
+```
+
+Reads `pickle/graph.pkl`, `pickle/positions.pkl`, `pickle/kde.pkl` (produced by the `network` stage) and writes `pickle/best_routes.pkl`, `pickle/best_score.pkl`, `pickle/log.pkl`.
+
+Default parameters (edit `genetic.py` `__main__` block to change):
+
+| Parameter | Default |
+| --- | --- |
+| Routes per network | 20 |
+| Population size | 100 |
+| Generations | 30 |
+| Min route length | 45 km |
+| Max route length | 80 km |
+
+### On a remote server
+
+`runner.sh` pulls the latest code, activates the venv, and runs the GA:
+
+```bash
+./runner.sh
+```
+
+After it completes, copy the pickles back and run the post-processing stage:
+
+```bash
+scp user@server:~/remaking_wmata/pickle/*.pkl ./pickle/
+python pipeline.py --stages genetic --force
+```
+
+---
+
+## The Web Viewer
+
+The interactive viewer (`app/`) is a static Leaflet.js application. Open `app/index.html` directly in a browser, or serve it with any static file server:
+
+```bash
+python -m http.server 8000
+# then open http://localhost:8000/app/
+```
+
+The viewer reads `data/output/lines_naive.geojson`, `lines_iterative.geojson`, and `lines_genetic.geojson` relative to its location. These are produced by the `naive`, `iterative`, and `genetic` pipeline stages.
+
+**Features:**
+
+- Toggle between naive, iterative, and genetic network variants
+- Show/hide existing real-world transit layers (WMATA, MARC, VRE, Purple Line, DC Streetcar)
+- Toggle station catchment areas
+- Route finder: click two points on the map to get a transfer-minimizing Dijkstra path with travel time estimate
+- Layer toggle panel with group columns
+
+---
+
+## Supporting Scripts
+
+### Build POI (non-population points)
+
+Fetches points of interest from DC, MD, and VA ArcGIS endpoints defined in `data_manifest.json`, filters to the study area, and writes one `combined_df.geojson` per state:
+
+```bash
+python build_non_population_points.py --state dc
+python build_non_population_points.py --state md --county-token "george" --county-token "montgom"
+python build_non_population_points.py --state va --county-token "arlington" --county-token "fairfax" --county-token "alexandria" --county-token "loudoun" --county-token "falls church"
+```
+
+Run these before the `graph_points` pipeline stage.
+
+### Build ACS features
+
+Fetches ACS 5-year tract data from the Census API:
+
+```bash
+python build_acs_features.py --state 11 --output data/dc/acs_tracts.csv  # DC
+python build_acs_features.py --state 24 --output data/md/acs_tracts.csv  # MD
+python build_acs_features.py --state 51 --output data/va/acs_tracts.csv  # VA
+```
+
+### Build demand features
+
+Scores census blocks or neighborhood areas by multi-factor demand (population density, POI proximity, transit access, ACS equity):
+
+```bash
+python build_demand_features.py \
+  --blocks data/complete_region_df.geojson \
+  --poi data/dc/non-population-points/combined_df.geojson \
+  --transit data/transit.geojson \
+  --output data/demand_features.geojson
+```
+
+### Validate the data catalog
+
+Loads every ArcGIS source in `data_manifest.json`, validates it, and writes a summary:
+
+```bash
+python build_data_catalog.py
+python build_data_catalog.py --strict   # exit non-zero if any source has issues
+python build_data_catalog.py --output data/catalog/my_catalog.json
+```
+
+### Reproject a GeoJSON
+
+```bash
+python geojson_converter.py data/output/lines_naive.geojson 3857 4326
+```
+
+---
+
+## Technical Background
+
+### Data Pipeline
+
+1. **Census block loading** — MD, VA, and DC TIGER tabblock shapefiles are filtered to the study counties and merged.
+2. **Transit potential** — computed per block as log(population / area).
+3. **Point selection** — recursive spatial quadrant decomposition (`core/walks.get_points`) selects high-likelihood seed points.
+4. **POI integration** — ArcGIS-sourced points of interest are merged with seed points and existing transit stops.
+5. **Gabriel graph** — a proximity graph connecting mutually-closest points using libpysal.
+6. **Louvain contraction** — community detection (resolution=0.07) contracts the graph from ~100k nodes to a manageable size.
+7. **KDE scoring** — a kernel density estimator is fit on the combined point set; each graph node is scored by KDE density within a 1 km radius.
+
+### Network Generation Algorithms
+
+#### Naive (Random Walk)
+
+Constrained walks traverse the graph, selecting edges by angle continuity and KDE score. Walks are accepted if their length falls within [45 km, 100 km]. An edge may be used up to three times across all walks, reflecting real-world interlining.
+
+#### Iterative Improvement
+
+Starts with 20 random walks, then iterates 100 times: the lowest-scoring walk is dropped and replaced by a new walk that scores at least as well.
+
+#### Genetic Algorithm
+
+Population-based metaheuristic (population size 100, 30 generations). Each individual is a 20-route network. The fitness function balances:
+
+- KDE demand capture
+- Geographic coverage (unique nodes)
+- Urban-to-suburb route pattern bonus
+- Redundancy penalty (duplicate edges)
+- Load-balance penalty (std dev of node visits)
+- Diversity penalty (pairwise Jaccard similarity)
+
+Crossover (one-point, per route), mutation (rewire / insert / remove), and tournament selection produce each new generation. Fitness evaluation is parallelised with `multiprocessing.Pool`.
+
+### Spatial Constraints
+
+The White House and US Capitol are surrounded by 900 m no-go buffers (`geo_constraints.py`). No walk or mutation step may place a station within these zones.
+
+### Route Finder (Web Viewer)
+
+Uses Dijkstra's algorithm on the generated transit graph with transfer penalties. Travel time is estimated as:
+
+```text
+time = (transit_km / 80 km·h⁻¹) × 60
+     + max(0, stations − 2) × 0.4 min
+     + transfers × 6 min
+     + walk_metres / 100 min
+```
+
+---
 
 ## Results & Discussion
 
-- **Key Metrics**: Critical coverage, neighborhood coverage, and average distance to nearest station.
-- **Performance**: All generated networks outperform the real-world WMATA network on these metrics.
-- **Sample Itineraries**: Generated networks provide faster transit times for key origin-destination pairs compared to the real-world network.
-- **Algorithm Comparison**: Each algorithm excels in different metrics (e.g., genetic for neighborhood coverage, iterative for critical coverage).
+All three generated networks outperform the existing WMATA network on point coverage, neighborhood coverage, and average distance to the nearest station. The genetic algorithm produces the best neighborhood coverage; the iterative algorithm produces the best point coverage.
 
-## Limitations
-
-- **Data Quality**: Varies by state; Virginia data is less comprehensive.
-- **KDE Limitations**: Treats all points equally, may not reflect true transit importance.
-- **Algorithmic Constraints**: Search space is large; random walks may not guarantee optimal coverage.
-- **Network Size**: Generated networks have more lines than the real-world network, affecting direct comparison.
-- **Realism**: The approach does not fully reflect real-world planning processes or constraints.
-
-## Implications for Urban Transit Planning
-
-Despite limitations, the approach demonstrates the value of computational tools for ambitious transit planning. The generated networks are comparable in density to the New York City Subway, suggesting that a larger, more connected network is feasible for the DC region.
-
-## Future Work
-
-- Apply the methodology to other metropolitan areas.
-- Explore deep learning-based approaches for network generation.
-- Incorporate additional data (e.g., socioeconomic, temporal changes).
-- Refine RL environments and reward functions.
-- Develop more user-focused and interactive visualizations.
-
-## References
-
-1. American Public Transportation Association. Public Transportation Facts. 2022. [APTA Facts](https://www.apta.com/news-publications/public-transportation-facts/)
-2. Camporeale, R., Caggiani, L., Fonzone, A., & Ottomanelli, M. (2016). Quantifying the impacts of horizontal and vertical equity in transit route planning. Transportation Planning and Technology, 40(1), 28–44. [https://doi.org/10.1080/03081060.2016.1238569](https://doi.org/10.1080/03081060.2016.1238569)
-3. Washington Metropolitan Area Transit Authority. WMATA Facts and Figures. 2023. [WMATA Facts](https://www.wmata.com/about/facts/)
-4. U.S. Census Bureau. Commuting Characteristics by Sex: 2022 American Community Survey 1-Year Estimates. 2022. [ACS Data](https://data.census.gov/table?q=commute+washington+dc&tid=ACSST1Y2022.S0801)
-5. Schrag, Z. M. (2006). The Great Society Subway: A History of the Washington Metro. Johns Hopkins University Press.
-6. Chester, M. V., & Horvath, A. (2009). Environmental assessment of passenger transportation should include infrastructure and supply chains. Environmental Research Letters, 4(2), 024008. [https://doi.org/10.1088/1748-9326/4/2/024008](https://doi.org/10.1088/1748-9326/4/2/024008)
-7. U.S. Census Bureau. 2020 Census Data. [Census Data](https://data.census.gov/)
-8. Open Data DC Portal. 2024. [Open Data DC](https://opendata.dc.gov/)
-9. Libera, G. D., & Samet, H. (1986). B-trees, k-d Trees, and Quadtrees: A Comparison Using Two-Dimensional Keys. IEEE Transactions on Pattern Analysis and Machine Intelligence, 8(5), 586–593. [https://doi.org/10.1109/TPAMI.1986.4767842](https://doi.org/10.1109/TPAMI.1986.4767842)
-10. Samet, H. (1984). The Quadtree and Related Hierarchical Data Structures. ACM Computing Surveys, 16(2), 187–260. [https://doi.org/10.1145/356924.356930](https://doi.org/10.1145/356924.356930)
-11. Toman, E., & Olszewska, D. (2014). Algorithm for transformation of geographic data into a network graph. Geoinformatica Polonica, 13, 41–52.
-12. Bast, H., Delling, D., Goldberg, A., Müller-Hannemann, M., Pajor, T., Sanders, P., Wagner, D., & Werneck, R. F. (2016). Route Planning in Transportation Networks. In Algorithm Engineering: Selected Results and Surveys (pp. 19–80). Springer. [https://doi.org/10.1007/978-3-319-49487-6_2](https://doi.org/10.1007/978-3-319-49487-6_2)
-13. Davis, S., & Impagliazzo, R. (2007). Models of greedy algorithms for graph problems. Algorithmica, 54(3), 269–317. [https://doi.org/10.1007/s00453-007-9124-4](https://doi.org/10.1007/s00453-007-9124-4)
-14. Chien, S., & Schonfeld, P. (2001). Optimization of Grid Transit System in Heterogeneous Urban Environment. Journal of Transportation Engineering, 127(4), 281–290. [https://doi.org/10.1061/(ASCE)0733-947X(2001)127:4(281)](https://doi.org/10.1061/(ASCE)0733-947X(2001)127:4(281))
-15. Dib, M., El Moudni, A., & El Faouzi, N.-E. (2017). Genetic algorithm for the design of urban transit networks. Journal of Advanced Transportation, 2017. [https://doi.org/10.1155/2017/1234567](https://doi.org/10.1155/2017/1234567)
-16. Périvier, H., et al. (2021). Real-time optimization of smart transit networks. Transportation Research Part C, 128, 103183.
-17. Roy, S., & Maji, A. (2023). High-speed rail station location optimization. Transportation Research Part B, 170, 1–22.
+Run `python pipeline.py --stages evaluate` for the full metrics table.
 
 ---
 
-**Note:** For full details, figures, and code, see the manuscript (`report/sample-manuscript.tex`) and the Jupyter notebook (`eda.ipynb`).
+## Limitations
+
+- Virginia data is less comprehensive than DC/MD.
+- KDE treats all POIs equally; a weighted demand signal would be more realistic.
+- Algorithmic walks are angle-constrained but not capacity- or cost-aware.
+- Networks have more lines than the real-world WMATA system, making direct density comparison imprecise.
+
+---
+
+## References
+
+1. American Public Transportation Association. Public Transportation Facts. 2022.
+2. Camporeale et al. (2016). Quantifying the impacts of horizontal and vertical equity in transit route planning. *Transportation Planning and Technology*, 40(1), 28–44.
+3. Washington Metropolitan Area Transit Authority. WMATA Facts and Figures. 2023.
+4. U.S. Census Bureau. Commuting Characteristics by Sex: 2022 ACS 1-Year Estimates.
+5. Schrag, Z. M. (2006). *The Great Society Subway: A History of the Washington Metro*. Johns Hopkins University Press.
+6. Chester & Horvath (2009). Environmental assessment of passenger transportation. *Environmental Research Letters*, 4(2), 024008.
+7. U.S. Census Bureau. 2020 Census Data.
+8. Open Data DC Portal. 2024.
+9. Bast et al. (2016). Route Planning in Transportation Networks. *Algorithm Engineering*, Springer.
+10. Dib et al. (2017). Genetic algorithm for the design of urban transit networks. *Journal of Advanced Transportation*.

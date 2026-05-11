@@ -12,7 +12,7 @@ from data_cleaning import (
     filter_by_county_tokens,
     normalize_source_frame,
 )
-from funcs import filter_points_in_polygons
+from core.spatial import filter_points_in_polygons
 from transit_data import load_arcgis_source, load_source_manifest
 
 
