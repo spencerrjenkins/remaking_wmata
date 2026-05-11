@@ -23,6 +23,7 @@ import random
 import math
 from shapely.ops import unary_union  # moved from inside functions to top
 from scipy.spatial import cKDTree
+from geo_constraints import is_point_feasible
 
 
 def load_shapefile(filepath, crs="EPSG:4326"):
@@ -46,9 +47,14 @@ def get_county_codes(fips_path, states, county_names):
 
 def compute_transit_potential(df):
     """Compute transit potential score for each block."""
-    df["transit_potential"] = np.log(
-        df["POP20"] / (df["ALAND20"] + df["AWATER20"]) * 1000 + 1
-    )
+    population = pd.to_numeric(df.get("POP20", 0), errors="coerce").fillna(0.0)
+    land_area = pd.to_numeric(df.get("ALAND20", 0), errors="coerce").fillna(0.0)
+    water_area = pd.to_numeric(df.get("AWATER20", 0), errors="coerce").fillna(0.0)
+    total_area = (land_area + water_area).replace(0, np.nan)
+    density = (population / total_area) * 1000
+    density = density.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    df["population_density"] = density
+    df["transit_potential"] = np.log1p(density)
     return df
 
 
@@ -342,6 +348,64 @@ def assign_node_scores(graph, positions, kde, radius=1000):
     return graph
 
 
+def _prepare_weighted_point_index(points_gdf, value_column="demand_score"):
+    if points_gdf is None or len(points_gdf) == 0:
+        return None, None
+    if value_column not in points_gdf.columns:
+        values = np.ones(len(points_gdf), dtype=float)
+    else:
+        values = pd.to_numeric(points_gdf[value_column], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    geometries = points_gdf.geometry
+    if geometries.geom_type.isin(["Polygon", "MultiPolygon"]).any():
+        geometries = geometries.centroid
+    coords = np.column_stack([geometries.x.to_numpy(), geometries.y.to_numpy()])
+    return coords, values
+
+
+def score_node_by_points(node, positions, points_gdf, radius=1000, value_column="demand_score"):
+    if points_gdf is None or len(points_gdf) == 0 or node not in positions:
+        return 0.0
+    coords, values = _prepare_weighted_point_index(points_gdf, value_column=value_column)
+    if coords is None or len(coords) == 0:
+        return 0.0
+    node_pos = np.array(positions[node])
+    tree = cKDTree(coords)
+    idxs = tree.query_ball_point(node_pos, radius)
+    if not idxs:
+        return 0.0
+    local_coords = coords[idxs]
+    local_values = values[idxs]
+    dists = np.linalg.norm(local_coords - node_pos, axis=1)
+    weights = np.exp(-(dists ** 2) / max((radius / 2) ** 2, 1.0))
+    return float(np.sum(local_values * weights))
+
+
+def score_walk_by_demand(walk, positions, points_gdf, radius=1000, value_column="demand_score"):
+    if points_gdf is None or len(points_gdf) == 0:
+        return 0.0
+    return sum(score_node_by_points(node, positions, points_gdf, radius, value_column) for node in walk)
+
+
+def assign_node_scores_with_demand(
+    graph,
+    positions,
+    kde,
+    radius=1000,
+    demand_gdf=None,
+    demand_radius=1000,
+    demand_column="demand_score",
+    demand_weight=1.0,
+):
+    weights = {}
+    for n in graph.nodes():
+        score = score_node(n, positions, kde, radius)
+        if demand_gdf is not None and len(demand_gdf) > 0:
+            score += demand_weight * score_node_by_points(n, positions, demand_gdf, demand_radius, demand_column)
+        weights[n] = score
+    nx.set_node_attributes(graph, weights, "score")
+    return graph
+
+
 def angle_between(v1, v2):
     """Calculate the angle in degrees between two vectors."""
     dot = v1[0] * v2[0] + v1[1] * v2[1]
@@ -387,12 +451,15 @@ def perform_walks(
     total_turn_high=80,
     total_turn_reset=30,
     max_count=3,
+    forbidden_polygons=None,
 ):
     def get_straightest_edge(node, prev_node, visited, sign, recursion_depth=0):
         neighbors = [
             n
             for n in graph.neighbors(node)
-            if (node, n) not in traversed_edges and n not in visited
+            if (node, n) not in traversed_edges
+            and n not in visited
+            and is_point_feasible(pos[n], forbidden_polygons)
         ]
         if not neighbors:
             return None, None, None
@@ -442,9 +509,14 @@ def perform_walks(
     while i < num_walks and timeout > 0:
         if len(complete_traversed_edges) < i + 1:
             complete_traversed_edges.append(set())
-        start_node = random.choice(
-            list(set(graph.nodes()) - set(i[0] for i in traversed_edges))
-        )
+        start_candidates = [
+            node
+            for node in set(graph.nodes()) - set(i[0] for i in traversed_edges)
+            if is_point_feasible(pos[node], forbidden_polygons)
+        ]
+        if not start_candidates:
+            break
+        start_node = random.choice(start_candidates)
         walk = [start_node]
         walk_reverse = [start_node]
         prev_node = None
@@ -587,6 +659,7 @@ def replace_lowest_scoring_walk(
     min_distance=0,
     max_distance=200000,
     radius=1000,
+    forbidden_polygons=None,
 ):
     """
     Removes the walk with the lowest KDE score from the list and adds a new walk using perform_walks.
@@ -631,6 +704,7 @@ def replace_lowest_scoring_walk(
             max_distance=max_distance,
             traversed_edges=traversed_edges,
             complete_traversed_edges=complete_traversed_edges,
+            forbidden_polygons=forbidden_polygons,
         )
         if new_walks:
             comp_score = score_walk_by_kde(new_walks[0], positions, kde, radius)
@@ -687,6 +761,7 @@ def save_lines_to_geojson(
     node_station_status=None,
     groups=None,
     names=defaultdict(lambda: "Unnamed station"),
+    line_metadata=None,
 ):
     """
     Save the transit lines to a GeoJSON file, including KDE value at each vertex.
@@ -713,22 +788,20 @@ def save_lines_to_geojson(
 
     features = []
     for idx, line in enumerate(lines):
-        coords = [to_latlon(positions[n]) for n in line if n in positions]
-        kde_values = [get_kde_value(n) for n in line if n in positions]
+        station_lookup = node_station_status or {}
+        line_nodes = [n for n in line if n in positions]
+        coords = [to_latlon(positions[n]) for n in line_nodes]
+        kde_values = [get_kde_value(n) for n in line_nodes]
         segment_lengths = [
             segment_length(positions[line[i]], positions[line[i + 1]])
             for i in range(len(line) - 1)
             if line[i] in positions and line[i + 1] in positions
         ]
-        is_station = None
+        is_station = [bool(station_lookup.get(n, True)) for n in line_nodes]
         group = idx
         if groups:
             group = groups[idx]
-        if node_station_status is not None:
-            is_station = [
-                bool(node_station_status.get(n, True)) for n in line if n in positions
-            ]
-        name_list = [names[n] if is_station[i] else "" for i, n in enumerate(line)]
+        name_list = [names[n] if is_station[i] else "" for i, n in enumerate(line_nodes)]
         feature = {
             "geometry": LineString(coords),
             "type": "line",
@@ -737,9 +810,32 @@ def save_lines_to_geojson(
             "segment_lengths": segment_lengths,
             "group": group,
             "name_list": name_list,
+            "route_kind": "generated",
+            "service_status": "planned",
+            "occupancy_pct": None,
+            "delay_min": None,
+            "accessibility_score": None,
+            "is_accessible": None,
+            "row_type": None,
+            "construction_cost_musd": None,
+            "ridership_estimate": None,
         }
-        if is_station is not None:
-            feature["is_station"] = is_station
+        if line_metadata:
+            metadata = line_metadata[idx] if isinstance(line_metadata, list) and idx < len(line_metadata) else line_metadata.get(idx, {}) if isinstance(line_metadata, dict) else {}
+            for key in [
+                "route_kind",
+                "service_status",
+                "occupancy_pct",
+                "delay_min",
+                "accessibility_score",
+                "is_accessible",
+                "row_type",
+                "construction_cost_musd",
+                "ridership_estimate",
+            ]:
+                if isinstance(metadata, dict) and key in metadata:
+                    feature[key] = metadata[key]
+        feature["is_station"] = is_station
         features.append(feature)
     gdf = gpd.GeoDataFrame(features)
     gdf.to_file(out_path, driver="GeoJSON")
@@ -1022,8 +1118,11 @@ def assign_station_neighborhoods(positions, status, neighborhoods_gdf):
         base_name = neighborhood_names[min_idx]
         neighborhood_names_count[base_name] += 1
         name_id = neighborhood_names_count[base_name]
+        name_parts = base_name.split("-")
+        neighborhood_label = name_parts[1] if len(name_parts) > 1 else name_parts[0]
+        suffix = f" {name_id}" if name_id > 1 else ""
         station_to_neighborhood[node] = (
-            f"{base_name.split('-')[1 if len(base_name.split("-")) > 1 else 0]} {name_id if name_id > 1 else ""}".strip()
+            f"{neighborhood_label}{suffix}".strip()
         )
     return station_to_neighborhood
 

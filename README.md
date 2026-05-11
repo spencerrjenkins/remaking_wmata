@@ -99,7 +99,7 @@ Function GetPoints(DataFrame D, Box E, Integer L):
 
 ## Visualization
 
-- **Transit Network Viewer**: Interactive web application for visualizing and exploring generated networks ([Transit Network Viewer](https://spencerrjenkins.github.io/cmsc725_wmata_map/app)).
+- **Transit Network Viewer**: Interactive web application for visualizing and exploring generated networks ([Transit Network Viewer](https://spencerrjenkins.github.io/remaking_wmata/app)).
 - **Maps and Plots**: KDE heatmaps, network overlays, Voronoi polygons, and catchment areas.
 - **Route Finder**: Calculates travel times using Dijkstra's algorithm, including walking and transfer penalties.
 

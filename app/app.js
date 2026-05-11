@@ -50,6 +50,7 @@ const layerToggles = document.getElementById('layer-toggles');
 // Maintain order of layers for toggles
 const layerOrder = [];
 const lineLayerNames = [];
+const selectedLineDetails = document.getElementById('selected-line-details');
 
 // Utility: round coordinate for matching
 function roundCoord(coord) {
@@ -59,6 +60,157 @@ function roundCoord(coord) {
 // Store which lines stop at each vertex
 const vertexLineMap = {};
 const vertexKDEMap = {};
+const lineMetadataById = {};
+let selectedLineId = null;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function toNumberOrNull(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+}
+
+function formatPercent(value) {
+    const num = toNumberOrNull(value);
+    return num === null ? 'N/A' : `${Math.round(num)}%`;
+}
+
+function formatMinutes(value) {
+    const num = toNumberOrNull(value);
+    return num === null ? 'N/A' : `${num.toFixed(0)} min`;
+}
+
+function formatDollars(value) {
+    const num = toNumberOrNull(value);
+    return num === null ? 'N/A' : `$${num.toFixed(1)}M`;
+}
+
+function normalizeLineMetadata(props = {}) {
+    return {
+        lineId: props.line_id,
+        name: props.name || `Line ${props.line_id}`,
+        routeKind: props.route_kind || 'generated',
+        serviceStatus: props.service_status || 'planned',
+        occupancyPct: toNumberOrNull(props.occupancy_pct),
+        delayMin: toNumberOrNull(props.delay_min),
+        accessibilityScore: toNumberOrNull(props.accessibility_score),
+        isAccessible: props.is_accessible,
+        rowType: props.row_type || 'unspecified',
+        constructionCostMusd: toNumberOrNull(props.construction_cost_musd),
+        ridershipEstimate: toNumberOrNull(props.ridership_estimate),
+    };
+}
+
+function statusChipClass(status) {
+    if (status === 'ok') return 'ok';
+    if (status === 'warn') return 'warn';
+    if (status === 'alert') return 'alert';
+    return 'muted';
+}
+
+function buildOperationalChips(meta) {
+    const crowdingClass = meta.occupancyPct !== null && meta.occupancyPct >= 80 ? 'alert' : meta.occupancyPct !== null && meta.occupancyPct >= 60 ? 'warn' : 'ok';
+    const delayClass = meta.delayMin !== null && meta.delayMin >= 10 ? 'alert' : meta.delayMin !== null && meta.delayMin >= 5 ? 'warn' : 'ok';
+    const accessibilityClass = meta.isAccessible === false ? 'warn' : meta.isAccessible === true ? 'ok' : 'muted';
+    const chips = [];
+    chips.push(`<span class="chip muted">${escapeHtml(meta.routeKind)}</span>`);
+    chips.push(`<span class="chip muted">${escapeHtml(meta.serviceStatus)}</span>`);
+    chips.push(`<span class="chip ${statusChipClass(crowdingClass)}">Crowding ${escapeHtml(formatPercent(meta.occupancyPct))}</span>`);
+    chips.push(`<span class="chip ${statusChipClass(delayClass)}">Delay ${escapeHtml(formatMinutes(meta.delayMin))}</span>`);
+    chips.push(`<span class="chip ${statusChipClass(accessibilityClass)}">${meta.isAccessible === false ? 'Not accessible' : meta.isAccessible === true ? 'Accessible' : 'Accessibility N/A'}</span>`);
+    chips.push(`<span class="chip muted">ROW ${escapeHtml(meta.rowType)}</span>`);
+    if (meta.constructionCostMusd !== null) chips.push(`<span class="chip muted">Cost ${escapeHtml(formatDollars(meta.constructionCostMusd))}</span>`);
+    if (meta.ridershipEstimate !== null) chips.push(`<span class="chip muted">Ridership ${escapeHtml(meta.ridershipEstimate.toFixed(0))}</span>`);
+    return chips.join(' ');
+}
+
+function renderTransitOperationsPanel(features) {
+    const summaryPanel = document.getElementById('transit-ops-summary');
+    const detailsPanel = document.getElementById('transit-line-details');
+    if (!summaryPanel || !detailsPanel) return;
+
+    const lines = (features || []).map(feature => normalizeLineMetadata(feature.properties || {}));
+    const crowdingCount = lines.filter(meta => meta.occupancyPct !== null).length;
+    const delayCount = lines.filter(meta => meta.delayMin !== null).length;
+    const accessibleCount = lines.filter(meta => meta.isAccessible !== null).length;
+    const plannedCount = lines.filter(meta => meta.serviceStatus === 'planned').length;
+
+    summaryPanel.innerHTML = [
+        { label: 'Loaded lines', value: lines.length, note: 'Current network layers' },
+        { label: 'Crowding data', value: crowdingCount, note: 'Lines with occupancy info' },
+        { label: 'Delay data', value: delayCount, note: 'Lines with delay tracking' },
+        { label: 'Accessibility data', value: accessibleCount, note: 'Lines with access flags' },
+    ].map(card => `
+        <div class="metric-card">
+            <span class="metric-label">${escapeHtml(card.label)}</span>
+            <div class="metric-value">${escapeHtml(card.value)}</div>
+            <div class="metric-note">${escapeHtml(card.note)}</div>
+        </div>
+    `).join('');
+
+    const sortedLines = lines.sort((a, b) => (a.lineId ?? 0) - (b.lineId ?? 0));
+    detailsPanel.innerHTML = sortedLines.length ? sortedLines.map(meta => `
+        <div class="line-detail-row">
+            <div>
+                <div class="line-detail-title">${escapeHtml(meta.name)}</div>
+                <div class="line-detail-meta">${escapeHtml(meta.routeKind)} · ${escapeHtml(meta.serviceStatus)} · ${escapeHtml(meta.rowType)}</div>
+            </div>
+            <div>${buildOperationalChips(meta)}</div>
+        </div>
+    `).join('') : `<div class="line-detail-row"><div class="line-detail-meta">No transit lines are loaded yet.</div></div>`;
+
+    if (plannedCount > 0) {
+        detailsPanel.insertAdjacentHTML('beforeend', `<div class="line-detail-row"><div class="line-detail-meta">${plannedCount} lines are still marked as planned.</div></div>`);
+    }
+
+    if (selectedLineDetails && !selectedLineId) {
+        selectedLineDetails.innerHTML = '<div class="line-detail-row"><div class="line-detail-meta">Click a line to inspect crowding, delay, accessibility, and cost fields.</div></div>';
+    }
+}
+
+function renderSelectedLineDetails(props) {
+    const detailsPanel = selectedLineDetails;
+    if (!detailsPanel || !props) return;
+    const meta = normalizeLineMetadata(props);
+    selectedLineId = meta.lineId;
+    detailsPanel.innerHTML = `
+        <div class="line-detail-row">
+            <div>
+                <div class="line-detail-title">${escapeHtml(meta.name)}</div>
+                <div class="line-detail-meta">Selected line · ${escapeHtml(meta.routeKind)} · ${escapeHtml(meta.serviceStatus)}</div>
+            </div>
+            <div>${buildOperationalChips(meta)}</div>
+        </div>
+    `;
+}
+
+function summarizeRouteOperations(lineSequence) {
+    const routeMeta = lineSequence.map(lineId => lineMetadataById[lineId]).filter(Boolean);
+    if (!routeMeta.length) {
+        return '<div class="metric-card"><span class="metric-label">Operations</span><div class="metric-value">No metadata</div><div class="metric-note">This route was generated without crowding or delay inputs.</div></div>';
+    }
+    const withCrowding = routeMeta.filter(meta => meta.occupancyPct !== null);
+    const withDelays = routeMeta.filter(meta => meta.delayMin !== null);
+    const withAccess = routeMeta.filter(meta => meta.isAccessible !== null);
+    const avgCrowding = withCrowding.length ? withCrowding.reduce((sum, meta) => sum + meta.occupancyPct, 0) / withCrowding.length : null;
+    const maxDelay = withDelays.length ? Math.max(...withDelays.map(meta => meta.delayMin)) : null;
+    const accessible = withAccess.filter(meta => meta.isAccessible !== false).length;
+
+    return `
+        <div class="metric-grid">
+            <div class="metric-card"><span class="metric-label">Avg crowding</span><div class="metric-value">${escapeHtml(formatPercent(avgCrowding))}</div><div class="metric-note">Across route segments with data</div></div>
+            <div class="metric-card"><span class="metric-label">Max delay</span><div class="metric-value">${escapeHtml(formatMinutes(maxDelay))}</div><div class="metric-note">Worst loaded line on this trip</div></div>
+            <div class="metric-card"><span class="metric-label">Accessible segments</span><div class="metric-value">${escapeHtml(accessible)}</div><div class="metric-note">Segments not marked inaccessible</div></div>
+        </div>
+    `;
+}
 
 // Load network (graph) - draw first, under lines
 fetchGeoJSON('../data/output/network.geojson').then(data => {
@@ -115,6 +267,8 @@ function getOffsetLatLngs(latlngA, latlngB, offsetMeters, map, direction = 1) {
 function loadLinesGeoJSON(source) {
     // Remove existing line layers and markers
     for (var member in vertexLineMap) delete vertexLineMap[member];
+    for (var member in lineMetadataById) delete lineMetadataById[member];
+    selectedLineId = null;
     // Remove all old catchment circles from the map before clearing
     catchmentCircles.forEach(circle => { if (map.hasLayer(circle)) map.removeLayer(circle); });
     currentLinesLayerNames.forEach(name => {
@@ -132,6 +286,7 @@ function loadLinesGeoJSON(source) {
         (data.features || []).forEach((feature, i) => {
             const coords = feature.geometry.coordinates;
             const kdeValues = feature.properties.kde_values || [];
+            lineMetadataById[feature.properties.line_id] = normalizeLineMetadata(feature.properties);
             coords.forEach((coord, idx) => {
                 const key = roundCoord(coord).join(',');
                 if (!vertexLineMap[key]) vertexLineMap[key] = [];
@@ -256,9 +411,7 @@ function loadLinesGeoJSON(source) {
                     }
                 });
                 poly.on('click', function (e) {
-                    // Optionally, you can add custom click behavior here
-                    // For now, just open the tooltip
-                    //this.openTooltip();
+                    renderSelectedLineDetails(feature.properties);
                 });
             }
             // Add vertex markers, popups, and circles
@@ -306,6 +459,7 @@ function loadLinesGeoJSON(source) {
         if (layers['Network']) layerOrder.push('Network');
         // Re-render toggles
         renderLayerToggles();
+        renderTransitOperationsPanel(data.features || []);
         linesGraph = { nodes: {}, edges: {} };
         (data.features || []).forEach(f => {
             const coords = f.geometry.coordinates;
@@ -831,6 +985,7 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                 const walkTime = Math.ceil(walkDistance / 100); // 100 meters per minute
                 walkTimeStr = `${walkTime} min`;
             }
+            const operationsSummary = summarizeRouteOperations(lineSequence);
             // Build list of intermediate station names
             let intermediateStations = [];
             for (let i = 1; i < path.length - 1; ++i) {
@@ -861,6 +1016,7 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                 `<br><b>Total distance:</b> ${totalDistanceKm.toFixed(2)} km` +
                 `<br><b>Transfers:</b> ${transfers}` +
                 `<br><b>Estimated travel time:</b> ${travelTimeStr}` +
+                operationsSummary +
                 (walkDistance > 0 ? `<br><b>Total walking distance:</b> ${((clickStartDist + clickEndDist) / 1000).toFixed(2)} km` : '') +
                 (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '');
             // Add show/hide button for intermediate stations
@@ -1145,6 +1301,7 @@ map.on('click', function (e) {
                 walkTimeStr = `${hours} hr${hours > 1 ? 's' : ''}` + (minutes > 0 ? ` ${minutes} min` : '');
             }
         }
+        const operationsSummary = summarizeRouteOperations(lineSequence);
         // Build list of intermediate station names
         let intermediateStations = [];
         for (let i = 1; i < path.length - 1; ++i) {
@@ -1176,6 +1333,7 @@ map.on('click', function (e) {
             `<br><b>Total distance:</b> ${totalDistanceKm.toFixed(2)} km` +
             `<br><b>Transfers:</b> ${transfers}` +
             `<br><b>Estimated travel time:</b> ${travelTimeStr}` +
+                operationsSummary +
             (walkDistance > 0 ? `<br><b>Total walking distance:</b> ${((clickStartDist + clickEndDist) / 1000).toFixed(2)} km` : '') +
             (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '');
         // Add show/hide button for intermediate stations

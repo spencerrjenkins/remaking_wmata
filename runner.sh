@@ -1,4 +1,4 @@
-cd cmsc725_wmata_map
+cd remaking_wmata
 git pull
 source venv/bin/activate
 python genetic.py

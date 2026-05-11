@@ -1,0 +1,404 @@
+{
+  "generated_at": "2026-04-17T21:31:40.230726+00:00",
+  "sources": [
+    {
+      "name": "hospital",
+      "state": "dc",
+      "category": "health",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Health_WebMercator/MapServer/4?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/hospital.geojson",
+      "feature_count": 15,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.685065+00:00"
+    },
+    {
+      "name": "grocery",
+      "state": "dc",
+      "category": "retail",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Business_Goods_and_Service_WebMercator/MapServer/4?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/grocery.geojson",
+      "feature_count": 91,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.698451+00:00"
+    },
+    {
+      "name": "religion",
+      "state": "dc",
+      "category": "community",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Cultural_and_Society_WebMercator/MapServer/5?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/religion.geojson",
+      "feature_count": 774,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.730820+00:00"
+    },
+    {
+      "name": "library",
+      "state": "dc",
+      "category": "education",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Cultural_and_Society_WebMercator/MapServer/4?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/library.geojson",
+      "feature_count": 28,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.743221+00:00"
+    },
+    {
+      "name": "poi",
+      "state": "dc",
+      "category": "general",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Location_WebMercator/FeatureServer/3?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/poi.geojson",
+      "feature_count": 2000,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.810241+00:00"
+    },
+    {
+      "name": "pub_school",
+      "state": "dc",
+      "category": "education",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Education_WebMercator/MapServer/5?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/pub_school.geojson",
+      "feature_count": 123,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.831282+00:00"
+    },
+    {
+      "name": "ind_school",
+      "state": "dc",
+      "category": "education",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Education_WebMercator/MapServer/3?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/ind_school.geojson",
+      "feature_count": 80,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.844698+00:00"
+    },
+    {
+      "name": "rec",
+      "state": "dc",
+      "category": "recreation",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Recreation_WebMercator/MapServer/3?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/rec.geojson",
+      "feature_count": 144,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.862927+00:00"
+    },
+    {
+      "name": "museum",
+      "state": "dc",
+      "category": "culture",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Cultural_and_Society_WebMercator/MapServer/54?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/museum.geojson",
+      "feature_count": 172,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.880054+00:00"
+    },
+    {
+      "name": "unknown",
+      "state": "dc",
+      "category": "other",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Cultural_and_Society_WebMercator/MapServer/6?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/unknown.geojson",
+      "feature_count": 52,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.891234+00:00"
+    },
+    {
+      "name": "primary_care",
+      "state": "dc",
+      "category": "health",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Health_WebMercator/MapServer/7?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/primary_care.geojson",
+      "feature_count": 49,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.911192+00:00"
+    },
+    {
+      "name": "wic",
+      "state": "dc",
+      "category": "health",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Public_Service_WebMercator/MapServer/55?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/wic.geojson",
+      "feature_count": 64,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.923559+00:00"
+    },
+    {
+      "name": "pharm",
+      "state": "dc",
+      "category": "health",
+      "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Business_Goods_and_Service_WebMercator/MapServer/9?f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/dc/non-population-points/pharm.geojson",
+      "feature_count": 145,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.939190+00:00"
+    },
+    {
+      "name": "state_facilities",
+      "state": "md",
+      "category": "government",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Structure/MD_StateFacilities/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/state_facilities.geojson",
+      "feature_count": 908,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.977641+00:00"
+    },
+    {
+      "name": "fed_mil",
+      "state": "md",
+      "category": "government",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Military/MD_MilitaryInstallations/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/fed_mil.geojson",
+      "feature_count": 29,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:39.991103+00:00"
+    },
+    {
+      "name": "state_mil",
+      "state": "md",
+      "category": "government",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Military/MD_MilitaryInstallations/FeatureServer/1/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/state_mil.geojson",
+      "feature_count": 36,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.006924+00:00"
+    },
+    {
+      "name": "gov_support",
+      "state": "md",
+      "category": "community",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Structure/MD_CommunitySupport/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/gov_support.geojson",
+      "feature_count": 1484,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.102673+00:00"
+    },
+    {
+      "name": "incentive_zones",
+      "state": "md",
+      "category": "economic",
+      "source_url": "https://geodata.md.gov/imap/rest/services/BusinessEconomy/MD_IncentiveZones/FeatureServer/11/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/incentive_zones.geojson",
+      "feature_count": 4,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.119998+00:00"
+    },
+    {
+      "name": "main_street",
+      "state": "md",
+      "category": "economic",
+      "source_url": "https://geodata.md.gov/imap/rest/services/BusinessEconomy/MD_IncentiveZones/FeatureServer/1/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/main_street.geojson",
+      "feature_count": 34,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.139120+00:00"
+    },
+    {
+      "name": "libraries",
+      "state": "md",
+      "category": "education",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Education/MD_Libraries/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/libraries.geojson",
+      "feature_count": 198,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.164890+00:00"
+    },
+    {
+      "name": "k12_public",
+      "state": "md",
+      "category": "education",
+      "source_url": "https://geodata.md.gov/imap/rest/services/Education/MD_EducationFacilities/FeatureServer/5/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+      "cache_path": "/Users/spencerrjenkins/Documents/remaking_wmata/data/md/non-population-points/k12_public.geojson",
+      "feature_count": 1366,
+      "crs": "EPSG:4326",
+      "required_columns": [
+        "source_name",
+        "source_url",
+        "source_state",
+        "source_category",
+        "geometry_kind",
+        "retrieved_at"
+      ],
+      "issues": [],
+      "retrieved_at": "2026-04-17T21:31:40.230161+00:00"
+    }
+  ]
+}

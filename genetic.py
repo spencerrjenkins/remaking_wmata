@@ -2,9 +2,10 @@ import random
 import numpy as np
 from collections import Counter, defaultdict
 from copy import deepcopy
-from funcs import perform_walks, score_walk_by_kde
+from funcs import perform_walks, score_walk_by_kde, score_walk_by_demand
 import multiprocessing
 import pickle
+from geo_constraints import is_point_feasible
 
 
 def fitness(
@@ -12,12 +13,19 @@ def fitness(
     positions,
     kde,
     radius=2000,
+    demand_gdf=None,
+    demand_radius=1000,
+    demand_weight=0.5,
     node_types=None,
     population=None,
     similarity_penalty_weight=100,
 ):
     route_scores = [
         score_walk_by_kde(walk, positions, kde, radius) for walk in route_set
+    ]
+    demand_scores = [
+        score_walk_by_demand(walk, positions, demand_gdf, demand_radius)
+        for walk in route_set
     ]
     pattern_bonus = sum(route_pattern_score(walk, node_types) for walk in route_set)
     unique_nodes = set(n for walk in route_set for n in walk)
@@ -37,6 +45,7 @@ def fitness(
 
     return (
         sum(route_scores)
+        + demand_weight * sum(demand_scores)
         + 10 * coverage_score
         + 1000 * pattern_bonus
         - 50 * redundancy_penalty
@@ -50,7 +59,7 @@ def selection(population, fitnesses, num_selected):
     return [population[i] for i in selected_indices]
 
 
-def mutate(route_set, graph, mutation_rate=0.3):
+def mutate(route_set, graph, positions, mutation_rate=0.3, forbidden_polygons=None):
     new_set = deepcopy(route_set)
     if random.random() < mutation_rate:
         idx = random.randint(0, len(new_set) - 1)
@@ -64,14 +73,22 @@ def mutate(route_set, graph, mutation_rate=0.3):
         if op == "rewire":
             i, j = sorted(random.sample(range(1, len(route) - 1), 2))
             midpoint = route[i : j + 1]
-            neighbors = list(graph.neighbors(route[i - 1]))
+            neighbors = [
+                neighbor
+                for neighbor in graph.neighbors(route[i - 1])
+                if is_point_feasible(positions.get(neighbor), forbidden_polygons)
+            ]
             if neighbors:
                 midpoint[0] = random.choice(neighbors)
             route[i : j + 1] = midpoint
 
         elif op == "insert":
             node = random.choice(route)
-            neighbors = list(graph.neighbors(node))
+            neighbors = [
+                neighbor
+                for neighbor in graph.neighbors(node)
+                if is_point_feasible(positions.get(neighbor), forbidden_polygons)
+            ]
             if neighbors:
                 insert_node = random.choice(neighbors)
                 pos = random.randint(1, len(route) - 1)
@@ -109,7 +126,13 @@ def route_pattern_score(route, node_types):
 
 
 def initialize_population(
-    graph, positions, population_size, num_routes, min_distance, max_distance
+    graph,
+    positions,
+    population_size,
+    num_routes,
+    min_distance,
+    max_distance,
+    forbidden_polygons=None,
 ):
 
     population = []
@@ -124,6 +147,7 @@ def initialize_population(
             max_distance=max_distance,
             traversed_edges=traversed_edges,
             complete_traversed_edges=complete_traversed_edges,
+            forbidden_polygons=forbidden_polygons,
         )
         if walks and len(walks) == num_routes:
             population.append(walks)
@@ -157,8 +181,18 @@ def individual_similarity(ind1, ind2):
 
 
 def parallel_fitness(args):
-    route_set, positions, kde, radius, node_types, population = args
-    return fitness(route_set, positions, kde, radius, node_types, population)
+    route_set, positions, kde, radius, demand_gdf, demand_radius, demand_weight, node_types, population = args
+    return fitness(
+        route_set,
+        positions,
+        kde,
+        radius,
+        demand_gdf=demand_gdf,
+        demand_radius=demand_radius,
+        demand_weight=demand_weight,
+        node_types=node_types,
+        population=population,
+    )
 
 
 def genetic_algorithm(
@@ -171,8 +205,12 @@ def genetic_algorithm(
     min_distance=20000,
     max_distance=40000,
     radius=2000,
+    demand_gdf=None,
+    demand_radius=1000,
+    demand_weight=0.5,
     mutation_rate=0.1,
     core_bounds=None,
+    forbidden_polygons=None,
     caller=lambda **a: None,
 ):
     if core_bounds is not None:
@@ -181,7 +219,13 @@ def genetic_algorithm(
         node_types = {n: "suburb" for n in positions}
 
     population = initialize_population(
-        graph, positions, population_size, num_routes, min_distance, max_distance
+        graph,
+        positions,
+        population_size,
+        num_routes,
+        min_distance,
+        max_distance,
+        forbidden_polygons=forbidden_polygons,
     )
     best_solution = None
     best_fitness = float("-inf")
@@ -198,7 +242,17 @@ def genetic_algorithm(
         print(f"generation {gen}...", end="\r", flush=True)
         with multiprocessing.Pool() as pool:
             fitness_args = [
-                (route_set, positions, kde, radius, node_types, population)
+                (
+                    route_set,
+                    positions,
+                    kde,
+                    radius,
+                    demand_gdf,
+                    demand_radius,
+                    demand_weight,
+                    node_types,
+                    population,
+                )
                 for route_set in population
             ]
             fitnesses = pool.map(parallel_fitness, fitness_args)
@@ -245,7 +299,14 @@ def genetic_algorithm(
             children.extend([child1, child2])
 
         population = [
-            mutate(child, graph, mutation_rate) for child in children[:population_size]
+            mutate(
+                child,
+                graph,
+                positions,
+                mutation_rate,
+                forbidden_polygons=forbidden_polygons,
+            )
+            for child in children[:population_size]
         ]
 
     return best_solution, best_fitness, log
