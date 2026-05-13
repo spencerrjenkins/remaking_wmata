@@ -17,7 +17,7 @@
 \renewcommand{\shortauthors}{S. Jenkins}
 
 \begin{abstract}
-This paper presents a computational framework for the design and economic evaluation of reimagined rapid transit networks for the Washington, DC metropolitan area. Motivated by the historical limitations of the existing WMATA system, this study leverages geospatial analysis, graph neural networks, and multiple optimization metaheuristics---including a genetic algorithm and a MAX-MIN Ant Colony System~\cite{stutzle2000mmas,nikolic2013aco}---to generate and evaluate alternative transit networks. Origin-destination employment data from the LEHD LODES dataset~\cite{lodes2023} augments population-based demand signals, while OpenStreetMap right-of-way classification~\cite{boeing2017osmnx} enables per-segment construction cost estimation calibrated to FTA benchmarks~\cite{fta2023ntd,flyvbjerg2003overruns}. A doubly-constrained gravity model~\cite{wilson1971gravity} calibrated to a WMATA-scale ridership target provides station-level boarding estimates disaggregated by time of day. The resulting networks outperform the real-world WMATA network on key coverage metrics: point coverage (up to 32.7\%), neighborhood coverage (up to 12.3\%), and average distance to the nearest station (as low as 0.85 km in DC). These results demonstrate the potential of data-driven, algorithmically optimized approaches to improve urban mobility, equity, and fiscal feasibility in transit planning.
+This paper presents a computational framework for the design and economic evaluation of reimagined rapid transit networks for the Washington, DC metropolitan area. Motivated by the historical limitations of the existing WMATA system, this study leverages geospatial analysis, multi-hop graph neighborhood aggregation, and multiple network generation approaches---including heuristic random walks, an iterative improvement method, a MAX-MIN Ant Colony System~\cite{stutzle2000mmas,nikolic2013aco}, and a genetic algorithm---to generate and evaluate alternative transit networks. Origin-destination employment data from the LEHD LODES dataset~\cite{lodes2023} augments population-based demand signals, while OpenStreetMap right-of-way classification~\cite{boeing2017osmnx} enables per-segment construction cost estimation calibrated to FTA benchmarks~\cite{fta2023ntd,flyvbjerg2003overruns}. A doubly-constrained gravity model~\cite{wilson1971gravity} calibrated to a WMATA-scale ridership target provides station-level boarding estimates disaggregated by time of day. The resulting networks outperform the real-world WMATA network on key coverage metrics: point coverage (up to 16.5\%), neighborhood coverage (up to 7.0\%), and average distance to the nearest station (as low as 0.99\,km in DC). These results demonstrate the potential of data-driven, algorithmically optimized approaches to improve urban mobility and equity in transit planning.
 \end{abstract}
 
 \maketitle
@@ -44,7 +44,7 @@ This design philosophy limits practical use. The largely radial structure makes 
 
 The persistent gaps in the current network's ability to connect high-density and underserved regions further motivate a new approach. For example, the lack of direct connections between major suburban job centers or marginalized neighborhoods limits economic opportunity and social inclusion~\cite{lit:equity}. Existing evaluation frameworks may overlook these gaps, focusing on aggregate metrics that mask disparities in access and service quality.
 
-To address these challenges, this study combines computational and geospatial techniques to generate, evaluate, and visualize alternative transit networks for the Washington, DC region.
+To address these challenges, this study asks: \textit{Can data-driven, algorithmically generated rapid transit networks for the Washington, DC region outperform the existing WMATA system on coverage, equity, and access metrics?} This paper makes the following contributions: (1) a demand-weighted spatial graph construction pipeline combining census, employment, and point-of-interest data; (2) four distinct transit network generation algorithms---constrained random walks, iterative improvement, MAX-MIN Ant Colony Optimization, and a genetic algorithm---applied to the same spatial search space; (3) per-segment construction cost estimates via OpenStreetMap right-of-way classification; (4) station-level ridership modeled using a doubly-constrained gravity model; and (5) a multi-metric evaluation against the real-world WMATA network on coverage, equity, and transfer burden.
 
 
 % --- Table: Counties and FIPS codes ---
@@ -211,7 +211,7 @@ ACS equity signal ($w_{eq}$) & 0.35 \\
 \end{tabular}
 \end{table}
 
-Node importance is further refined using a two-layer GraphSAGE mean aggregator~\cite{hamilton2017graphsage} implemented in pure NumPy. Each node is featurized by its geographic coordinates, log-KDE density, degree, clustering coefficient, and approximate betweenness centrality. Two rounds of neighborhood aggregation propagate demand signals through the graph: a node surrounded by many high-demand neighbors scores higher than an isolated node with the same KDE value. Final scores are the L2-normalized combination of the GNN embedding norm and KDE density, normalized to $[0, 1]$. An optional Graph Attention Network variant~\cite{velickovic2018gat} is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
+Node importance is further refined using a two-layer multi-hop neighborhood aggregation scheme implemented in pure NumPy, following the GraphSAGE mean aggregator formulation~\cite{hamilton2017graphsage}. Unlike a trained GNN, no weight matrices are learned; the aggregation applies fixed mean pooling to propagate existing demand signals through graph topology. Each node is featurized by its geographic coordinates, log-KDE density, degree, clustering coefficient, and approximate betweenness centrality. Two rounds of mean aggregation propagate these signals: a node surrounded by many high-demand neighbors scores higher than an isolated node with the same KDE value. Final scores are the L2-normalized combination of the aggregated embedding norm and KDE density, normalized to $[0, 1]$. An optional Graph Attention Network variant~\cite{velickovic2018gat} with trained attention weights is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
 
 Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files), aggregated from census blocks to tracts, and combined into a demand surface based on job-flow volumes to the top origin-destination pairs. This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
 
@@ -288,7 +288,7 @@ Edges are available if they are unexplored or have been explored up to three tim
 
 \subsection{Network Creation: Iterative Improvement Algorithm}
 
-The iterative improvement method initializes a set of random walks. Walks are scored by the sum of KDE scores for all nodes, indicating transit utility. The lowest-scoring walk is replaced with a higher-scoring walk, and this process is repeated up to 100 times.
+The iterative improvement method initializes a set of random walks. Walks are scored by the sum of KDE scores for all nodes, indicating transit utility. The lowest-scoring walk is replaced with a higher-scoring walk, and this process is repeated up to 20 times.
 
 \subsection{Network Creation: Ant Colony Optimisation}
 
@@ -296,7 +296,7 @@ The ACO stage implements a MAX-MIN Ant System (MMAS)~\cite{stutzle2000mmas} adap
 \[
   P(u \to v) \propto \tau_{uv}^{\alpha} \cdot \eta_{uv}^{\beta}
 \]
-where $\eta_{uv}$ is a KDE- and LODES-weighted heuristic desirability. After each generation, pheromone is deposited in proportion to the fitness of the global-best route set and then clamped to $[\tau_{\min}, \tau_{\max}]$ to prevent premature convergence---a defining property of MMAS~\cite{stutzle2000mmas}. The algorithm runs 20 ants for 30 generations and applies the same angle and line-length constraints as the random walk algorithm. The ACO network is the default displayed in the Transit Network Viewer.
+where $\eta_{uv}$ is a KDE- and LODES-weighted heuristic desirability. After each generation, pheromone is deposited in proportion to the fitness of the global-best route set and then clamped to $[\tau_{\min}, \tau_{\max}]$ to prevent premature convergence---a defining property of MMAS~\cite{stutzle2000mmas}. The algorithm runs 20 ants and, in the current pipeline configuration, a single generation; the MMAS framework supports additional generations for further pheromone-guided refinement of the route set~\cite{stutzle2000mmas}. The algorithm applies the same angle and line-length constraints as the random walk algorithm. The ACO network is the default displayed in the Transit Network Viewer.
 
 \subsection{Network Creation: Genetic Algorithm}
 The genetic algorithm (GA) is a population-based metaheuristic inspired by natural selection. In this project, the GA optimizes rapid transit networks by evolving a population of candidate solutions toward higher fitness according to multiple criteria.
@@ -311,14 +311,14 @@ Each individual represents a candidate transit network, consisting of 20 lines, 
     \item \textbf{Diversity Penalty:} Penalizes networks that are too similar within a generation.
 \end{itemize}
 
-Crossover and mutation produce the next generation. Crossover combines parts of two parent networks; mutation introduces random changes. Operators are designed to respect network constraints (valid paths, feasible line lengths). Elitism ensures the best individuals are retained. The algorithm runs for 30 generations, with efficient execution enabled by Python multiprocessing.
+Crossover and mutation produce the next generation. Crossover combines parts of two parent networks; mutation introduces random changes. Operators are designed to respect network constraints (valid paths, feasible line lengths). Elitism ensures the best individuals are retained. The algorithm runs for a single generation in the current pipeline configuration; elitism ensures that the best-scoring individuals from the initial population are carried forward. Efficient execution is enabled by Python multiprocessing.
 
 \subsection{Network Post-processing}
 Each walk represents a candidate metro line. Lines are grouped by shared alignment using a pairwise distance matrix and a similarity threshold.
 
 Not all nodes in the contracted Gabriel graph become stations due to varying edge lengths. Stations are selected as all terminal nodes, transfer points between different line groups, and nodes spaced at least 1 km apart. This ensures each station serves a catchment area of roughly 500 meters.
 
-Station names are assigned by proximity to neighborhood centroids, using data from Arlington County, Maryland, and the District of Columbia. If multiple stations fall within the same neighborhood, a numeric suffix is added. I was unable to find neighborhood name or boundary data for for other parts of Virginia. Figure~\ref{fig:voronoi} illustrates the Voronoi polygons used to analyze neighborhood coverage and spatial equity.
+Station names are assigned by proximity to neighborhood centroids, using data from Arlington County, Maryland, and the District of Columbia. If multiple stations fall within the same neighborhood, a numeric suffix is added. I was unable to find neighborhood name or boundary data for other parts of Virginia. Figure~\ref{fig:voronoi} illustrates the Voronoi polygons used to analyze neighborhood coverage and spatial equity.
 
 % --- Figure: Voronoi Polygons ---
 \begin{figure}[ht]
@@ -334,7 +334,7 @@ Station names are assigned by proximity to neighborhood centroids, using data fr
 Candidate networks are evaluated using benchmarks that reflect practical and theoretical priorities: geographic coverage (fraction of high-demand areas served), network connectivity (linking major regions), efficiency (minimizing redundant or excessively long lines), and demand capture (maximizing KDE-weighted coverage). These metrics are computed for each network and inform both random walk scoring and the genetic algorithm's fitness function.
 
 \subsection{Influential Hyperparameters}
-There were many hyperparameters that contributed to the success or lack thereof of the input. Table \ref{tab:hyperparams} shows the hyperparameters and the values used. The Louvain community resolution threshold was a key factor in determining the success of the network creation algorithm. Higher networks lead to stronger community contraction, leading to sparser graphs. The value of 0.07 provided a balance between a network with far too large of a search space and far too long considering short edges of less than a city block, while values that were too great resulted in suburban nodes being greatly reduced or lost. The line minimum and maximum distance were selected to reflect the size of the Washington metropolitan area and the distance of similar rapid transit services across the United States. The angle constraints were chosen so that the course of a given transit line would be preserved while still allowing for options and randomness. A minimum angle constraint of greater than 130 degrees results in premature halting of the walk algorithm as many nodes do not have any edges with angles greater than this. The same applies to the maximum deviation and maximum reset angles, where values too low for both hyperparameters results in walks reaching nodes they cannot proceed from. Minimum station spacing is set to 1 km, while a 500 m catchment radius is used for coverage and equity metrics. The genetic algorithm weights were chosen to provide the strongest preference towards networks with coverage of low- and high-density areas on the same line. 
+There were many hyperparameters that contributed to the success or lack thereof of the input. Table \ref{tab:hyperparams} shows the hyperparameters and the values used. The Louvain community resolution threshold was a key factor in determining the success of the network creation algorithm. Higher resolution values lead to stronger community contraction, leading to sparser graphs. The value of 0.07 provided a balance between a network with far too large of a search space and far too long considering short edges of less than a city block, while values that were too great resulted in suburban nodes being greatly reduced or lost. The line minimum and maximum distance were selected to reflect the size of the Washington metropolitan area and the distance of similar rapid transit services across the United States. The angle constraints were chosen so that the course of a given transit line would be preserved while still allowing for options and randomness. A minimum angle constraint of greater than 130 degrees results in premature halting of the walk algorithm as many nodes do not have any edges with angles greater than this. The same applies to the maximum deviation and maximum reset angles, where values too low for both hyperparameters results in walks reaching nodes they cannot proceed from. Minimum station spacing is set to 1 km, while a 500 m catchment radius is used for coverage and equity metrics. The genetic algorithm weights were chosen to provide the strongest preference towards networks with coverage of low- and high-density areas on the same line. 
 
 % --- Hyperparameter Table ---
 \begin{table*}[h]
@@ -354,7 +354,7 @@ Maximum reset angle & Angle that will reset return-to-course behavior (degrees) 
 Group assignment threshold & Similarity threshold for grouping lines & 50\% \\
 Minimum station spacing & Minimum distance between stations (meters) & 1,000 \\
 Station catchment radius & Catchment radius for coverage metrics (meters) & 500 \\
-Iterative improvement iterations & Number of iterations for improvement algorithm & 100 \\
+Iterative improvement iterations & Number of iterations for improvement algorithm & 20 \\
 Genetic: total score weight & Weight for total score in fitness function & 1 \\
 Genetic: service pattern weight & Weight for service pattern in fitness function & 1000 \\
 Genetic: redundancy penalty weight & Penalty for redundant lines in fitness function & -50 \\
@@ -435,7 +435,7 @@ where $O_i$ and $D_j$ are origin and destination demand signals combining popula
 
 \section{Network Visualization and Exploration}
 
-The Transit Network Viewer application, developed as a part of this project, allows users to visualize and explore the networks created using the algorithms designed in this project. The web application is highly interactive, allowing users to compare networks, examine specific lines, view station names, and determine estimated travel times. \href{https://spencerrjenkins.github.io/remaking_wmata/app}{Click here to access the Transit Network Viewer.}
+The Transit Network Viewer application, developed as a part of this project, allows users to visualize and explore the networks created using the algorithms designed in this project. The web application is highly interactive, allowing users to compare networks, examine specific lines, view station names, and determine estimated travel times. The Transit Network Viewer is accessible at \url{https://spencerrjenkins.github.io/remaking_wmata/app}.
 
 The web application's interface centers around a mapping tool powered by Leaflet. The interactive map displays networks generated by four algorithms, defaulting to the ACO result. Users can select among four source variants---ACO, Genetic, Iterative, and Naive---using the source selector panel. Users can toggle the real-world transit network, station catchment areas, and the contracted Gabriel graph. Hovering over a transit line reveals a tooltip including start and end location, total distance, number of stations, estimated construction cost, daily ridership, and a color-coded right-of-way chip. Hovering over a station shows its name, lines served, estimated daily boardings, and accessibility. An hourly ridership sparkline (20 bars from 5am to midnight, with peak-hour bars highlighted in dark blue) is displayed in the selected-line details panel alongside a WMATA-style crowding indicator showing eight car icons colored by estimated occupancy level. 
 
@@ -509,18 +509,18 @@ Extended metrics are computed using census block centroids and POP20. \textit{Po
 Table~\ref{tab:eval_basic} reports basic coverage and access metrics for all variants. Table~\ref{tab:eval_equity} summarizes equity and population coverage at multiple walk radii, and Table~\ref{tab:eval_efficiency} reports service efficiency and transfer burden. For context, the real WMATA system is approximately 129 route miles (208 km) with 98 stations~\cite{lit:wmata_wikipedia}. The \textit{track\_km} column below is a service-track measure derived from line-segment lengths (interlined segments counted multiple times) and is therefore not directly comparable to route miles, but it provides a consistent internal length basis across all generated networks and WMATA.
 
 \begin{table*}[h]
-\caption{Basic Coverage and Access Metrics}
+\caption{Basic Coverage and Access Metrics. \textit{pop\_in\_catchments} is a relative KDE density mass integrated over station catchments, not an absolute population count; use only for comparing variants.}
 \label{tab:eval_basic}
 \resizebox{\textwidth}{!}{
 \begin{tabular}{lccccc}
 \toprule
 \textbf{Network} & \textbf{pt\_cov\%} & \textbf{neigh\_cov\%} & \textbf{avg\_dist\_region\_m} & \textbf{avg\_dist\_dc\_m} & \textbf{pop\_in\_catchments} \\
 \midrule
-Naive & 12.92 & 4.41 & 10010 & 1761 & 0.0189 \\
-Iterative & 18.57 & 7.99 & 18009 & 914 & 0.0279 \\
-ACO & 32.71 & 12.26 & 9720 & 895 & 0.0528 \\
-Genetic & 22.87 & 8.95 & 8848 & 845 & 0.0348 \\
-WMATA & 10.37 & 3.03 & 15374 & 1611 & 0.0110 \\
+Naive & 14.24 & 5.79 & 10038 & 1241 & 0.0184 \\
+Iterative & 16.46 & 7.02 & 12518 & 991 & 0.0213 \\
+ACO & 11.00 & 3.99 & 8642 & 1697 & 0.0168 \\
+Genetic & 13.06 & 5.79 & 10206 & 1219 & 0.0175 \\
+WMATA & 10.34 & 3.03 & 15341 & 1630 & 0.0098 \\
 \bottomrule
 \end{tabular}
 }
@@ -534,11 +534,11 @@ WMATA & 10.37 & 3.03 & 15374 & 1611 & 0.0110 \\
 \toprule
 \textbf{Network} & \textbf{pop\_gini} & \textbf{cov\_250m\%} & \textbf{cov\_500m\%} & \textbf{cov\_1km\%} & \textbf{high\_need\_cov\%} \\
 \midrule
-Naive & 0.508 & 2.1 & 7.6 & 23.6 & 10.3 \\
-Iterative & 0.469 & 3.1 & 11.1 & 26.0 & 18.5 \\
-ACO & 0.494 & 5.5 & 20.4 & 49.4 & 30.2 \\
-Genetic & 0.501 & 3.5 & 13.2 & 36.8 & 20.3 \\
-WMATA & 0.546 & 1.1 & 4.7 & 14.8 & 6.9 \\
+Naive & 0.503 & 2.1 & 7.9 & 25.7 & 10.1 \\
+Iterative & 0.463 & 2.6 & 9.4 & 29.8 & 12.8 \\
+ACO & 0.498 & 2.0 & 7.5 & 24.0 & 8.6 \\
+Genetic & 0.501 & 1.8 & 7.4 & 25.3 & 9.3 \\
+WMATA & 0.546 & 1.0 & 4.3 & 13.5 & 6.0 \\
 \bottomrule
 \end{tabular}
 }
@@ -552,25 +552,27 @@ WMATA & 0.546 & 1.1 & 4.7 & 14.8 & 6.9 \\
 \toprule
 \textbf{Network} & \textbf{track\_km} & \textbf{pop\_per\_km} & \textbf{mean\_xfers} & \textbf{0xfer\%} & \textbf{1xfer\%} & \textbf{2+xfers\%} \\
 \midrule
-Naive & 1486.5 & 0.22 & 1.04 & 14.3 & 67.6 & 18.1 \\
-Iterative & 1543.1 & 0.31 & 0.56 & 43.5 & 56.5 & 0.0 \\
-ACO & 1783.6 & 0.49 & 1.68 & 11.6 & 36.5 & 51.9 \\
-Genetic & 12388.6 & 0.05 & 0.97 & 14.1 & 74.6 & 11.3 \\
+Naive & 1434.5 & 0.26 & 1.04 & 14.0 & 68.5 & 17.5 \\
+Iterative & 1425.9 & 0.31 & 0.81 & 20.5 & 77.9 & 1.6 \\
+ACO & 1438.6 & 0.25 & 0.87 & 21.7 & 69.9 & 8.4 \\
+Genetic & 1383.4 & 0.25 & 0.91 & 19.8 & 69.0 & 11.2 \\
 WMATA & 344.1 & 0.59 & \textit{N/A} & \textit{N/A} & \textit{N/A} & \textit{N/A} \\
 \bottomrule
 \end{tabular}
 }
 \end{table*}
 
-Several patterns are consistent across the metrics. ACO produces the highest coverage at all walk radii and the strongest high-need coverage, but it also carries the highest transfer burden and a long service-track footprint. The iterative network yields the lowest transfer burden and a comparatively strong balance of equity and coverage, while the naive network is modest on both coverage and efficiency. The genetic network achieves good spatial coverage but does so with an extremely long service-track length, driving its efficiency score down by an order of magnitude relative to other variants. WMATA scores lower on walk-radius coverage, which is expected for a real network designed with feeder buses, park-and-ride, and interlined service rather than uniform 500 m walk access; however, it remains the most efficient per kilometer of service track, consistent with its cost-constrained, operationally mature design.
+Several patterns emerge from the evaluation data. The iterative network is the strongest overall performer, leading on point coverage (16.46\%), neighborhood coverage (7.02\%), 1\,km population coverage (29.8\%), high-need coverage (12.8\%), population in catchments (0.0213), and Gini coefficient (0.463)---the most equitable distribution of transit access across stations. The naive network is competitive, ranking second on point coverage (14.24\%) and tying the genetic variant on neighborhood coverage (5.79\%), while posting the second-best DC intra-city average distance (1,241\,m). The ACO and genetic networks perform broadly similarly on coverage and efficiency, with point coverage of 11.0--13.1\% and pop\_per\_km of 0.25 for both.
 
-These tables show that algorithmic networks can be tuned to maximize coverage, but real-world feasibility requires balancing coverage with transfer burden and track length. The ACO variant is the most ambitious in spatial reach, while the iterative variant is the most operationally coherent under the transfer metric. Given WMATA's real-world system length and station count~\cite{lit:wmata_wikipedia}, the generated networks should be interpreted as aggressive build-out scenarios rather than direct replacements at current capital scale.
+A notable finding is that the current ACO network's average distance to a station within DC (1,697\,m) now exceeds WMATA's (1,630\,m), meaning the ACO variant provides worse intra-city DC access than the real metro system despite outperforming it regionally. This reflects the single-generation ACO configuration in the current pipeline, which does not allow sufficient pheromone accumulation to concentrate routes on the dense urban core. WMATA still leads all generated variants on service efficiency (pop\_per\_km 0.59), consistent with its purpose-built design for high-ridership corridors. The four generated networks are more similar to one another than in prior evaluations, all clustering between 1,383--1,439\,km of service track and 11.0--16.5\% point coverage. This convergence reflects both the stabilized contracted Gabriel graph and the practical effect of running each algorithm on the same underlying search space.
 
-I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. The ACO variant is not included in Table~\ref{tab:transittimes} because its route-planner runs were not recorded for this set of examples. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
+These results show that algorithmic networks can meaningfully outperform the existing metro on coverage and equity metrics, but real-world feasibility requires balancing those gains against transfer burden and track length. The iterative variant offers the strongest case for a balanced design, combining the widest coverage with the most equitable station distribution and a manageable transfer burden. Given WMATA's real-world system---208\,km, 6 lines, 98 stations~\cite{lit:wmata_wikipedia}---compared to the 20-line generated networks, the coverage advantages must be understood in the context of this scale difference. The generated networks represent aggressive build-out scenarios rather than direct replacements at current capital scale; a fair comparison would require normalizing by number of lines or total route length.
+
+I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. Travel times for three of the four generated variants are included in Table~\ref{tab:transittimes}; ACO times were not recorded for these itineraries and are therefore excluded. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
 
 % --- Table: Sample Transit Times ---
 \begin{table*}[h]
-\caption{Sample Transit Times for Selected Origin-Destination Pairs}
+\caption{Sample Transit Times for Selected Origin-Destination Pairs (three of four generated networks; ACO results not available for these itineraries)}
 \label{tab:transittimes}
 \resizebox{\textwidth}{!}{
 \begin{tabular}{lccc}
@@ -587,18 +589,18 @@ Real-world & 43 min & 1 hr 7 min & 41 min \\
 }
 \end{table*}
 
-Visual comparison of the generated networks provides additional justification and insight. The naive network shows some suburb-to-suburb connectivity, but it leaves large underserved areas, consistent with its lower point and neighborhood coverage metrics.
+Visual comparison of the generated networks provides additional context. The naive network achieves competitive point and neighborhood coverage relative to the other generated variants, consistent with the principle that 20 constrained random walks produce serviceable coverage through volume rather than directed optimization.
 
-The iterative improvement algorithm takes the most time to execute, but produces a more coherent network with strong urban-core connectivity and the lowest transfer burden. Its coverage is moderate, suggesting that the objective function favors cohesive corridors over maximal spatial reach.
+The iterative network is the most balanced performer. Its Gini coefficient (0.463) indicates a relatively uniform distribution of transit access, and it leads on most coverage metrics. Its 0-transfer share (20.5\%) is lower than in some prior evaluations, reflecting reduced opportunities for line alignment overlap in the current contracted graph; fewer station pairs can therefore be served without a transfer.
 
-The ACO network is the most expansive spatially, with the strongest coverage and high-need access. That coverage comes at the cost of a long service-track length and a high share of 2+ transfer pairs, indicating a network that is ambitious in reach but operationally complex.
+The ACO network, constrained to a single generation in the current pipeline configuration, produces a more compact and operationally coherent solution than in prior runs: mean transfers have improved to 0.87 and the 2\texttt{+} transfer share has fallen to 8.4\%. However, its spatial coverage has contracted and its average intra-DC station distance (1,697\,m) now lags behind both the real WMATA system and all other generated variants. Running ACO for additional generations would likely recover coverage, as longer pheromone accumulation expands the region of the solution space explored.
 
-The genetic algorithm produces strong core-to-suburb connections and comparatively high neighborhood coverage, but its service-track length is extreme, which drives down efficiency. This likely reflects the service-pattern reward weight, which favors extensive reach at the expense of construction realism.
+The genetic algorithm produces a network of comparable scope to the other generated variants, with the shortest service track (1,383.4\,km) and coverage metrics broadly in line with naive and ACO. The service-pattern reward in the fitness function does not produce an outsized network under the current parameterization, and all efficiency metrics are consistent with the other generated networks.
 
 \subsection{Limitations}
 The quality of the networks generated using my pipeline are only as good as the data they are created from. As discussed earlier, the data portals for each of the states varied wildly with respect to data depth and breadth. Virginia, in particular, did not have nearly as much data containing locations of areas supported by transit. Maryland and Washington, D.C. both had much more comprehensive data resources, which is expected given that Washington, D.C. is a single municipal jurisdiction and Maryland is a relatively small state mostly centered around a single metropolitan area. Virginia, on the other hand, is a large state with many metropolitan areas, and the data reflected this. There were often data of the sort I was interested in, but only for one or two counties and outside the DC area. 
 
-The method of combining point data from multiple sources and creating a KDE from multiple sources entailed several limitations: first, each data point was treated as having the same transit importance, and the KDE therefore acted as a map of the amount of points in a given area. This means that the KDE scoring returned high values for regions that were well covered by the existing data, and low values for those with poor coverage, and no weight to whatever relative importance may have existed between points. The overall takeaway is that the transit algorithm happened to produce plausible-looking maps not as a reflection of the data, but because I constrained an otherwise random algorithm to produce results that look plausible. Across the three algorithms, I received wildly different results that often left many densely populated neighborhoods underserved. On the other hand, across algorithms, I obtained similar travel times between destination pairs, which is likely because with sufficient density, the network is large enough that one- or two-transfer routes on fairly straight alignments are possible between most urban destinations. It is also important to note that my network's reported high performance as compared to the real-world network is also likely largely attributable to the length and number of lines. Each algorithm produces a 20-line network, as compared to the real-world network which has six lines. 
+The method of combining point data from multiple sources and creating a KDE from multiple sources entailed several limitations: first, each data point was treated as having the same transit importance, and the KDE therefore acted as a map of the amount of points in a given area. This means that the KDE scoring returned high values for regions that were well covered by the existing data, and low values for those with poor coverage, and no weight to whatever relative importance may have existed between points. The overall takeaway is that the transit algorithms produce plausible-looking networks partly because geometric constraints guide routes along natural alignments, and partly because a large number of generated lines provides broad coverage by volume. The data-driven demand scoring shapes the spatial concentration of these lines but cannot substitute for the hard connectivity requirements that real-world transit planning specifies. Across the four algorithms, results are more similar in scale than in prior runs but still often leave densely populated neighborhoods underserved, as evidenced by high-need coverage rates of 8.6--12.8\% across all generated variants. Across algorithms, travel times between destination pairs remain broadly similar, which is likely because with sufficient network density, one- or two-transfer routes on fairly straight alignments are possible between most urban destinations. It is also important to note that my network's reported high performance as compared to the real-world network is also likely largely attributable to the length and number of lines. Each algorithm produces a 20-line network, as compared to the real-world network which has six lines. 
 
 In general, the method I have created in this project does not largely reflect the priorities or procedures of real-world transit agencies. Transit networks are not decided by random algorithms applied across entire metropolitan areas. The search space of the problem is still too great; there were not enough hard constraints on which areas the network should have connected. The result is a network that reaches most necessary areas because the number of randomly-generated lines is high enough. 
 
