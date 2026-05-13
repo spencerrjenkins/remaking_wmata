@@ -30,8 +30,10 @@ import logging
 import os
 import pickle
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import geopandas as gpd
 import numpy as np
@@ -153,6 +155,10 @@ class PipelineConfig:
     naive_group_threshold: float = 0.5
     iterative_group_threshold: float = 0.5
     genetic_group_threshold: float = 0.3
+    eval_kde_bandwidth: float = 1000.0
+    eval_kde_n_samples_per_person: float = 0.005
+    eval_grid_resolution: int = 60
+    eval_max_points_per_station: Optional[int] = 800
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +221,56 @@ def _load_network_pickles():
     with open(PICKLE_DIR / "kde.pkl", "rb") as f:
         kde = pickle.load(f)
     return graph, positions, kde
+
+
+def _kde_cache_path(bandwidth: float, n_samples_per_person: float) -> Path:
+    n_tag = f"{n_samples_per_person:.4f}".replace(".", "p")
+    bw_tag = f"{bandwidth:.0f}"
+    return PICKLE_DIR / f"pop_kde_bw{bw_tag}_n{n_tag}.pkl"
+
+
+def _load_population_kde_cache(
+    cache_path: Path,
+    blocks_path: Path,
+    bandwidth: float,
+    n_samples_per_person: float,
+) -> Optional[object]:
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "rb") as f:
+            payload = pickle.load(f)
+    except Exception as exc:
+        log.warning("evaluate: failed to read KDE cache %s (%s)", cache_path.name, exc)
+        return None
+
+    if not isinstance(payload, dict) or "kde" not in payload:
+        return None
+    if payload.get("blocks_mtime") != blocks_path.stat().st_mtime:
+        return None
+    if payload.get("bandwidth") != bandwidth:
+        return None
+    if payload.get("n_samples_per_person") != n_samples_per_person:
+        return None
+    return payload["kde"]
+
+
+def _save_population_kde_cache(
+    cache_path: Path,
+    blocks_path: Path,
+    bandwidth: float,
+    n_samples_per_person: float,
+    kde: object,
+) -> None:
+    PICKLE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "blocks_mtime": blocks_path.stat().st_mtime,
+        "bandwidth": bandwidth,
+        "n_samples_per_person": n_samples_per_person,
+        "kde": kde,
+    }
+    with open(cache_path, "wb") as f:
+        pickle.dump(payload, f)
 
 
 def _station_gdf_from_lines(path: str, positions: dict) -> gpd.GeoDataFrame:
@@ -809,24 +865,65 @@ def stage_evaluate(
     cfg: PipelineConfig,
     county_shapes: gpd.GeoDataFrame,
     neighborhoods: gpd.GeoDataFrame,
+    force: bool = False,
 ) -> None:
     """Print a table of coverage and access metrics for each network variant."""
     log.info("evaluate: loading data …")
+    stage_start = time.perf_counter()
+
+    t0 = time.perf_counter()
     _, positions, _ = _load_network_pickles()
+    log.info("evaluate: network pickles loaded in %.2fs", time.perf_counter() - t0)
+
+    t0 = time.perf_counter()
     df_points = load_geojson(str(DATA_DIR / "complete_points.geojson"))
     if df_points.crs is None or df_points.crs.to_epsg() != 3857:
         df_points = df_points.to_crs(epsg=3857)
+    log.info("evaluate: points loaded in %.2fs", time.perf_counter() - t0)
 
-    blocks = load_geojson(str(DATA_DIR / "complete_region_df.geojson")).to_crs(epsg=3857)
-    popkde = population_density_kde(blocks)
+    blocks_path = DATA_DIR / "complete_region_df.geojson"
+    kde_cache = _kde_cache_path(cfg.eval_kde_bandwidth, cfg.eval_kde_n_samples_per_person)
+    t0 = time.perf_counter()
+    popkde = None if force else _load_population_kde_cache(
+        kde_cache,
+        blocks_path,
+        cfg.eval_kde_bandwidth,
+        cfg.eval_kde_n_samples_per_person,
+    )
+    if popkde is not None:
+        log.info("evaluate: population KDE cache hit in %.2fs", time.perf_counter() - t0)
+    else:
+        t0 = time.perf_counter()
+        blocks = load_geojson(str(blocks_path)).to_crs(epsg=3857)
+        log.info("evaluate: blocks loaded in %.2fs", time.perf_counter() - t0)
 
+        t0 = time.perf_counter()
+        popkde = population_density_kde(
+            blocks,
+            bandwidth=cfg.eval_kde_bandwidth,
+            n_samples_per_person=cfg.eval_kde_n_samples_per_person,
+        )
+        log.info("evaluate: population KDE fit in %.2fs", time.perf_counter() - t0)
+        _save_population_kde_cache(
+            kde_cache,
+            blocks_path,
+            cfg.eval_kde_bandwidth,
+            cfg.eval_kde_n_samples_per_person,
+            popkde,
+        )
+
+    t0 = time.perf_counter()
     wmata_stations = load_geojson(
         str(DATA_DIR / "real_transit" / "wmata" / "Metro_Stations_Regional.geojson")
     ).to_crs(epsg=3857)
+    log.info("evaluate: WMATA stations loaded in %.2fs", time.perf_counter() - t0)
 
+    t0 = time.perf_counter()
     region_poly = combine_polygons_to_single(county_shapes.to_crs(epsg=3857))
     dc_poly = county_shapes[county_shapes["STATE"] == "DC"].to_crs(epsg=3857).iloc[0].geometry
+    log.info("evaluate: region polygons prepared in %.2fs", time.perf_counter() - t0)
 
+    t0 = time.perf_counter()
     variants: dict[str, gpd.GeoDataFrame] = {}
     for name, path in [
         ("naive", OUTPUT_DIR / "lines_naive.geojson"),
@@ -839,18 +936,35 @@ def stage_evaluate(
         else:
             log.warning("evaluate: %s not found, skipping", path.name)
     variants["wmata"] = wmata_stations
+    log.info("evaluate: %d variants prepared in %.2fs", len(variants), time.perf_counter() - t0)
 
     headers = [
         "variant", "pt_cov%", "neigh_cov%",
         "avg_dist_region_m", "avg_dist_dc_m", "pop_in_catchments",
     ]
     def _variant_metrics(name, station_gdf):
+        t_variant = time.perf_counter()
         pt_cov = station_gdf_catchment_coverage(station_gdf, df_points)
         neigh_cov = station_gdf_catchment_coverage(station_gdf, neighborhoods)
         avg_region = average_distance_to_points_within_polygon(station_gdf, region_poly)
         avg_dc = average_distance_to_points_within_polygon(station_gdf, dc_poly)
+        t_pop = time.perf_counter()
         pop_cov = estimate_population_in_catchments(
-            popkde, station_gdf, catchment_radius=500, grid_resolution=100
+            popkde,
+            station_gdf,
+            catchment_radius=500,
+            grid_resolution=cfg.eval_grid_resolution,
+            max_points_per_station=cfg.eval_max_points_per_station,
+        )
+        log.info(
+            "evaluate: %s pop_in_catchments in %.2fs",
+            name,
+            time.perf_counter() - t_pop,
+        )
+        log.info(
+            "evaluate: %s metrics done in %.2fs",
+            name,
+            time.perf_counter() - t_variant,
         )
         return name, [
             name,
@@ -861,10 +975,13 @@ def stage_evaluate(
             f"{pop_cov:.4f}",
         ]
 
+    t0 = time.perf_counter()
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as _p:
         _futs = [_p.submit(_variant_metrics, name, gdf) for name, gdf in variants.items()]
         _results = {name: row for _f in concurrent.futures.as_completed(_futs) for name, row in [_f.result()]}
     rows = [_results[name] for name in variants if name in _results]
+    log.info("evaluate: metrics computed in %.2fs", time.perf_counter() - t0)
+    log.info("evaluate: total stage time %.2fs", time.perf_counter() - stage_start)
 
     col_widths = [
         max(len(h), max(len(r[i]) for r in rows))
@@ -1111,7 +1228,7 @@ def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: i
         "row_snap": lambda: stage_row_snap(cfg, force),
         "cost": lambda: stage_cost(cfg, force),
         "ridership": lambda: stage_ridership(cfg, force),
-        "evaluate":          lambda: stage_evaluate(cfg, county_shapes, neighborhoods),
+        "evaluate":          lambda: stage_evaluate(cfg, county_shapes, neighborhoods, force),
         "evaluate_extended": lambda: stage_evaluate_extended(cfg, county_shapes, neighborhoods),
     }
 

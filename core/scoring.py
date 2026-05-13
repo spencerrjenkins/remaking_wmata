@@ -5,6 +5,8 @@ import pandas as pd
 from scipy.spatial import cKDTree
 from shapely.geometry import Point
 from sklearn.neighbors import KernelDensity
+from functools import lru_cache
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +173,7 @@ def estimate_population_in_catchments(
     points_gdf,
     catchment_radius: float = 500,
     grid_resolution: int = 100,
+    max_points_per_station: Optional[int] = None,
 ) -> float:
     """
     Estimate total population within catchment circles around *points_gdf*
@@ -180,19 +183,22 @@ def estimate_population_in_catchments(
         return 0.0
 
     area_per_point = (2 * catchment_radius / grid_resolution) ** 2
+    offsets = _catchment_grid_offsets(catchment_radius, grid_resolution)
+    if offsets.size == 0:
+        return 0.0
+
+    if max_points_per_station is not None and max_points_per_station > 0:
+        if len(offsets) > max_points_per_station:
+            step = max(1, len(offsets) // max_points_per_station)
+            offsets = offsets[::step][:max_points_per_station]
+
     all_coords = []
     slice_sizes = []
-
     for pt in points_gdf.geometry:
-        x0, y0 = pt.x, pt.y
-        x = np.linspace(x0 - catchment_radius, x0 + catchment_radius, grid_resolution)
-        y = np.linspace(y0 - catchment_radius, y0 + catchment_radius, grid_resolution)
-        xx, yy = np.meshgrid(x, y)
-        coords = np.vstack([xx.ravel(), yy.ravel()]).T
-        mask = np.hypot(coords[:, 0] - x0, coords[:, 1] - y0) <= catchment_radius
-        masked = coords[mask]
-        all_coords.append(masked)
-        slice_sizes.append(len(masked))
+        center = np.array([pt.x, pt.y])
+        coords = offsets + center
+        all_coords.append(coords)
+        slice_sizes.append(len(coords))
 
     if not all_coords or sum(slice_sizes) == 0:
         return 0.0
@@ -205,3 +211,14 @@ def estimate_population_in_catchments(
         total += densities[idx : idx + n].sum() * area_per_point
         idx += n
     return total
+
+
+@lru_cache(maxsize=16)
+def _catchment_grid_offsets(catchment_radius: float, grid_resolution: int) -> np.ndarray:
+    """Return (N, 2) offsets for a grid inside a circle centered at (0, 0)."""
+    x = np.linspace(-catchment_radius, catchment_radius, grid_resolution)
+    y = np.linspace(-catchment_radius, catchment_radius, grid_resolution)
+    xx, yy = np.meshgrid(x, y)
+    coords = np.vstack([xx.ravel(), yy.ravel()]).T
+    mask = np.hypot(coords[:, 0], coords[:, 1]) <= catchment_radius
+    return coords[mask]
