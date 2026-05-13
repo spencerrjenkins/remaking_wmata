@@ -366,7 +366,7 @@ Genetic: diversity incentive weight & Incentive for diversity in population & -1
 \end{table*}
 
 \subsection{Pipeline Orchestration and Reproducibility}
-The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}) spanning 14 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
+The implementation now uses a cached, stage-based pipeline spanning 14 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
 
 \begin{table*}[h]
 \caption{Pipeline Stages and Primary Outputs}
@@ -395,8 +395,6 @@ evaluate\_extended & stdout tables & Equity, efficiency, transfers \\
 \end{tabular}
 }
 \end{table*}
-
-Several supporting command-line utilities were added to make preprocessing reproducible and auditable: \texttt{build\_non\_population\_points.py} (ArcGIS POI ingestion), \texttt{build\_acs\_features.py} (ACS tract attributes), \texttt{build\_demand\_features.py} (multi-factor demand scoring), and \texttt{build\_data\_catalog.py} (source validation/catalog generation). Together, these updates reduce manual preprocessing and improve end-to-end reproducibility.
 
 \section{Right-of-Way Classification and Construction Cost}
 
@@ -468,7 +466,7 @@ The most important feature of the Transit Network Viewer is the Route Finder, wh
 \section{Network Performance Analysis}
 
 \subsection{Evaluation Methodology}
-I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points in \texttt{complete\_points.geojson} that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
+I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
 
 Extended metrics are computed using census block centroids and POP20. \textit{Population Gini} splits each block's population equally across all stations within 500 m and computes the Gini coefficient across station totals. \textit{Population coverage at radii} computes the share of population whose nearest station is within 250 m, 500 m, and 1 km. \textit{High-need coverage} measures the share of top-quartile transit-potential blocks whose centroids are within 500 m of a station. \textit{Service efficiency} is population within 500 m per kilometer of service track; service track length is the sum of line segment lengths stored in each line GeoJSON, so interlined segments are counted multiple times. \textit{Transfer burden} builds a group-adjacency graph from line groupings, then samples up to 10,000 station pairs and BFSes the group graph to estimate minimum transfers, reporting the share of 0-transfer, 1-transfer, and 2+ transfer pairs.
 
