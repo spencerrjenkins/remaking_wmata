@@ -205,7 +205,7 @@ To incorporate non-population demand and equity considerations, I also build a m
 \[
     D = w_{pop}\hat{p} + w_{poi}\hat{d} + w_{transit}\hat{a} + w_{eq}\hat{e}
 \]
-where $\hat{p}$ is population density, $\hat{d}$ is POI density within a 1 km radius, $\hat{a}$ is inverse distance to the nearest existing transit stop, and $\hat{e}$ is an equity signal constructed from ACS median income, poverty rate, disability rate, and zero-vehicle household share. These block-level demand features are exported as \texttt{demand\_features.geojson} and used in extended evaluation and sensitivity checks.
+where $\hat{p}$ is population density, $\hat{d}$ is POI density within a 1 km radius, $\hat{a}$ is inverse distance to the nearest existing transit stop, and $\hat{e}$ is an equity signal constructed from ACS median income, poverty rate, disability rate, and zero-vehicle household share. These block-level demand features are used in extended evaluation and sensitivity checks.
 
 \begin{table}[h]
 \caption{Demand Feature Weights Used for Multi-Factor Scoring}
@@ -232,7 +232,7 @@ so a node surrounded by high-demand neighbors scores higher than an isolated nod
 \]
 where $\widehat{\cdot}$ denotes min-max normalization and $\hat{\rho}_v = \exp\!\bigl(\hat{f}(\mathbf{p}_v)\bigr)$ is the KDE density at node $v$. An optional Graph Attention Network variant~\cite{velickovic2018gat} with trained attention weights is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
 
-Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files). Block-level OD pairs are aggregated to census tract level using an 11-character GEOID prefix, and the top 5,000 OD pairs by job count are retained to keep the demand surface computationally tractable. For each retained pair, the workplace census tract centroid is used as the demand point and weighted by its normalized job-flow volume. The resulting \texttt{demand\_lodes.geojson} provides a set of demand-weighted points that feed directly into the ACO fitness function (see Section~\ref{sec:network_aco}). This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
+Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files). Block-level OD pairs are aggregated to census tract level using an 11-character GEOID prefix, and the top 5,000 OD pairs by job count are retained to keep the demand surface computationally tractable. For each retained pair, the workplace census tract centroid is used as the demand point and weighted by its normalized job-flow volume. The resulting data provides a set of demand-weighted points that feed directly into the ACO fitness function (see Section~\ref{sec:network_aco}). This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
 
 % --- Figure: KDE Heatmap ---
 \begin{figure}[ht]
@@ -342,7 +342,7 @@ LODES employment demand enters through the fitness function used to determine ho
 \[
   F = S_{\text{KDE}} + 0.4 \cdot S_{\text{demand}} + 5 \cdot |V_{\text{unique}}| - 30 \cdot R
 \]
-where $S_{\text{KDE}}$ is the sum of KDE scores for all covered nodes, $S_{\text{demand}}$ is the sum of LODES demand scores within 1\,km of each route node (from \texttt{demand\_lodes.geojson}), $|V_{\text{unique}}|$ is the count of distinct nodes covered (rewarding breadth), and $R$ counts duplicate edges across lines (penalizing redundancy). After each generation, pheromone is updated in two steps. First, all pheromone levels evaporate:
+where $S_{\text{KDE}}$ is the sum of KDE scores for all covered nodes, $S_{\text{demand}}$ is the sum of LODES demand scores within 1\,km of each route node, $|V_{\text{unique}}|$ is the count of distinct nodes covered (rewarding breadth), and $R$ counts duplicate edges across lines (penalizing redundancy). After each generation, pheromone is updated in two steps. First, all pheromone levels evaporate:
 \[
   \tau_{uv} \leftarrow \max\!\left(\tau_{\min},\; \tau_{uv}\,(1 - \rho)\right)
 \]
@@ -402,7 +402,7 @@ where $|V_{\mathrm{unique}}|$ is the total number of distinct nodes covered, $B$
     \State \Return $\mathcal{R}^*$
 \EndFunction
 \end{algorithmic}
-\caption{Pseudocode for the genetic algorithm network generation procedure. \Call{Crossover}{} performs single-point route-set crossover; \Call{Mutate}{} applies one of three operators (rewire, insert, or remove) to a randomly chosen line.}
+\caption{Pseudocode for the genetic algorithm network generation procedure. \texttt{Crossover} performs single-point route-set crossover; \texttt{Mutate} applies one of three operators (rewire, insert, or remove) to a randomly chosen line.}
 \label{fig:ga_pseudocode}
 \end{minipage}
 \Description{Genetic algorithm pseudocode}
@@ -463,37 +463,7 @@ Genetic: diversity incentive weight & Incentive for diversity in population & -1
 \end{table*}
 
 \subsection{Pipeline Orchestration and Reproducibility}
-The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}) spanning 15 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
-
-\begin{table*}[h]
-\caption{Pipeline Stages and Primary Outputs}
-\label{tab:pipeline}
-\resizebox{\textwidth}{!}{
-\begin{tabular}{lll}
-\toprule
-\textbf{Stage} & \textbf{Primary Output} & \textbf{Purpose} \\
-\midrule
-region & \texttt{complete\_region\_df.geojson} & Census blocks + transit potential \\
-transit\_points & \texttt{transit.geojson} & Aggregate real-world stops \\
-graph\_points & \texttt{complete\_points.geojson} & Seed points + POIs + transit \\
-network & \texttt{graph.pkl}, \texttt{positions.pkl}, \texttt{kde.pkl} & Gabriel graph + KDE scoring \\
-gnn\_scoring & \texttt{gnn\_scores.pkl}, updated \texttt{graph.pkl} & Multi-hop graph aggregation re-scoring \\
-lodes & \texttt{data/lodes/*.parquet} & LODES OD employment data \\
-naive & \texttt{lines\_naive.geojson} & Random-walk network \\
-iterative & \texttt{lines\_iterative.geojson} & Iterative improvement network \\
-aco & \texttt{lines\_aco.geojson} & MAX-MIN Ant System network \\
-genetic & \texttt{lines\_genetic.geojson} & Genetic algorithm network \\
-row\_snap & lines GeoJSON update & ROW type classification \\
-cost & lines GeoJSON update & Construction cost estimates \\
-ridership & lines GeoJSON update & Gravity model ridership \\
-evaluate & stdout tables & Basic coverage metrics \\
-evaluate\_extended & stdout tables & Equity, efficiency, transfers \\
-\bottomrule
-\end{tabular}
-}
-\end{table*}
-
-Several supporting command-line utilities were added to make preprocessing reproducible and auditable: \texttt{build\_non\_population\_points.py} (ArcGIS POI ingestion), \texttt{build\_acs\_features.py} (ACS tract attributes), \texttt{build\_demand\_features.py} (multi-factor demand scoring), and \texttt{build\_data\_catalog.py} (source validation/catalog generation). Together, these updates reduce manual preprocessing and improve end-to-end reproducibility.
+The implementation now uses a cached, stage-based pipeline spanning 15 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
 
 \section{Right-of-Way Classification and Construction Cost}
 
@@ -573,7 +543,7 @@ The most important feature of the Transit Network Viewer is the Route Finder, wh
 \section{Network Performance Analysis}
 
 \subsection{Evaluation Methodology}
-I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points in \texttt{complete\_points.geojson} that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
+I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points in the file that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
 
 Extended metrics are computed using census block centroids and POP20. \textit{Population Gini} splits each block's population equally across all stations within 500 m and computes the Gini coefficient across station totals:
 \[
@@ -677,11 +647,11 @@ A notable finding is that the current ACO network's average distance to a statio
 
 These results show that algorithmic networks can meaningfully outperform the existing metro on coverage and equity metrics, but real-world feasibility requires balancing those gains against transfer burden and track length. The iterative variant offers the strongest case for a balanced design, combining the widest coverage with the most equitable station distribution and a manageable transfer burden. Given WMATA's real-world system---208\,km, 6 lines, 98 stations~\cite{lit:wmata_wikipedia}---compared to the 20-line generated networks, the coverage advantages must be understood in the context of this scale difference. The generated networks represent aggressive build-out scenarios rather than direct replacements at current capital scale; a fair comparison would require normalizing by number of lines or total route length.
 
-I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. Travel times for three of the four generated variants are included in Table~\ref{tab:transittimes}; ACO times were not recorded for these itineraries and are therefore excluded. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
+I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. Travel times for three of the four generated variants are included in Table~\ref{tab:transittimes}. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
 
 % --- Table: Sample Transit Times ---
 \begin{table*}[h]
-\caption{Sample Transit Times for Selected Origin-Destination Pairs (three of four generated networks; ACO results not available for these itineraries)}
+\caption{Sample Transit Times for Selected Origin-Destination Pairs}
 \label{tab:transittimes}
 \resizebox{\textwidth}{!}{
 \begin{tabular}{lccc}
@@ -689,6 +659,7 @@ I also perform some potential use-case evaluation by identifying location pairs 
 \textbf{Network} & \textbf{College Park $\rightarrow$ DCA} & \textbf{Bethesda $\rightarrow$ Reston} & \textbf{Congress Heights $\rightarrow$ Silver Spring} \\
 \midrule
 Genetic & 29 min & 41 min & 30 min \\
+ACO & 1 hr 29 min & 1 hr 10 min & 35 min \\
 Iterative & 37 min & 1 hr 1 min & 19 min \\
 Naive & 32 min & 32 min & 17 min \\
 \midrule
