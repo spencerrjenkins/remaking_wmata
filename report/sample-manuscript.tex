@@ -129,7 +129,11 @@ The first step is to define the study area. Table~\ref{tab:counties} lists the c
     \Description{A map highlighting the counties and districts included in the Washington, DC metropolitan area for the study.}
 \end{figure}
 
-Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau TIGER/Line tabblock20 shapefiles~\cite{lit:tiger2023}. Transit potential for each block is derived from population density (population divided by land plus water area) and transformed using $\log(1 + \mathrm{density})$ to form a point-likelihood surface. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
+Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau TIGER/Line tabblock20 shapefiles~\cite{lit:tiger2023}. Transit potential for each block is derived from population density and transformed to form a point-likelihood surface:
+\[
+  \mathrm{potential}(b) = \ln\!\left(1 + \frac{\mathrm{POP20}(b)}{\mathrm{ALAND20}(b) + \mathrm{AWATER20}(b)} \times 10^3\right)
+\]
+where $\mathrm{POP20}(b)$ is the 2020 population of block $b$, and $\mathrm{ALAND20}(b) + \mathrm{AWATER20}(b)$ is the total area in m$^2$. The $\log(1+\cdot)$ transform compresses the heavy right tail of the density distribution. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
 
 % --- Figure: Census Block Map ---
 \begin{figure}[ht]
@@ -188,9 +192,14 @@ The census block data is transformed by taking $\log(1 + \mathrm{density})$. A r
     \Description{A heatmap or point map visualizing transformed census block data, highlighting locations with high need for transit.}
 \end{figure}
 
-This data is augmented with points for important destinations, as shown in Table~\ref{tab:datasources}. The selection reflects the availability of data from each source. The study also includes all bus and rail stops in the counties listed, to approximate areas of high transit importance.
+This data is augmented with points for important destinations, as shown in Table~\ref{tab:datasources}. The selection reflects the availability of data from each source. The study also includes all bus and rail stops in the counties listed, to approximate areas of high transit importance. Specifically, the following transit datasets are aggregated: WMATA Metro stations, WMATA bus stops, DC Streetcar stops, MARC Train stations, Purple Line stations, Virginia Railway Express (VRE) stations, Montgomery County Ride On stops, Maryland MTA bus stops, Prince George's County transit stops, and Virginia bus stops within the study area. These stops serve a dual function: they are included as candidate graph nodes, seeding the spatial search space with locations already recognized as transit-important, and they contribute the existing-transit-access component ($\hat{a}$, inverse distance to nearest stop) of the multi-factor demand surface.
 
-A kernel density estimate (KDE) is constructed over the selected points to provide scores for spatial queries at several stages~\cite{bib:silverman1986density}. Figure~\ref{fig:kde_heatmap} displays the KDE heatmap used to model spatial demand for transit.
+A Gaussian kernel density estimate (KDE) with 1,000\,m bandwidth is fit to the selected candidate points~\cite{bib:silverman1986density}. Figure~\ref{fig:kde_heatmap} displays the KDE heatmap used to model spatial demand for transit. Each graph node $v$ is then scored by the mean KDE density over its own location and 16 uniformly-spaced points on a circle of radius $r = 1{,}000$\,m:
+\[
+  \mathrm{score}_{\mathrm{KDE}}(v) = \frac{10^{10}}{17}\sum_{k=0}^{16}
+    \exp\!\Bigl(\hat{f}\bigl(\mathbf{p}_v + r\,\mathbf{e}_k\bigr)\Bigr)
+\]
+where $\hat{f}(\cdot)$ is the log-KDE, $\mathbf{e}_0 = \mathbf{0}$, and $\mathbf{e}_k = \bigl(\cos\tfrac{2\pi(k-1)}{16},\,\sin\tfrac{2\pi(k-1)}{16}\bigr)$ for $k \geq 1$. The $10^{10}$ factor is a numerical scaling constant. This radial sampling captures the local demand neighbourhood rather than just the point value, so a node at the edge of a dense area scores higher than one at its isolated center.
 
 To incorporate non-population demand and equity considerations, I also build a multi-factor demand surface over census blocks using population density, point-of-interest (POI) proximity, existing transit access, and tract-level American Community Survey (ACS) variables~\cite{lit:acs2022}. The demand score is defined as a weighted, min-max normalized combination:
 \[
@@ -213,9 +222,17 @@ ACS equity signal ($w_{eq}$) & 0.35 \\
 \end{tabular}
 \end{table}
 
-Node importance is further refined using a two-layer multi-hop neighborhood aggregation scheme implemented in pure NumPy, following the GraphSAGE mean aggregator formulation~\cite{hamilton2017graphsage}. Unlike a trained GNN, no weight matrices are learned; the aggregation applies fixed mean pooling to propagate existing demand signals through graph topology. Each node is featurized by its geographic coordinates, log-KDE density, degree, clustering coefficient, and approximate betweenness centrality. Two rounds of mean aggregation propagate these signals: a node surrounded by many high-demand neighbors scores higher than an isolated node with the same KDE value. Final scores are the L2-normalized combination of the aggregated embedding norm and KDE density, normalized to $[0, 1]$. An optional Graph Attention Network variant~\cite{velickovic2018gat} with trained attention weights is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
+Node importance is further refined using a two-layer multi-hop neighborhood aggregation scheme implemented in pure NumPy, following the GraphSAGE mean aggregator formulation~\cite{hamilton2017graphsage}. Unlike a trained GNN, no weight matrices are learned; the aggregation applies fixed mean pooling to propagate existing demand signals through graph topology. Each node is featurized by its geographic coordinates, log-KDE density, degree, clustering coefficient, and approximate betweenness centrality. Two rounds of mean aggregation propagate these signals according to:
+\[
+  H_v^{(l)} = \mathrm{ReLU}\!\left(H_v^{(l-1)} + \frac{1}{|N(v)|}\sum_{u \in N(v)} H_u^{(l-1)}\right), \quad l = 1, 2
+\]
+so a node surrounded by high-demand neighbors scores higher than an isolated node with the same local KDE value. The final per-node score combines the L2 norm of the two-layer embedding with the raw KDE density, both min-max-normalized to $[0, 1]$:
+\[
+  \mathrm{score}(v) = \widehat{\bigl\|H_v^{(2)}\bigr\|_2} + \hat{\rho}_v
+\]
+where $\widehat{\cdot}$ denotes min-max normalization and $\hat{\rho}_v = \exp\!\bigl(\hat{f}(\mathbf{p}_v)\bigr)$ is the KDE density at node $v$. An optional Graph Attention Network variant~\cite{velickovic2018gat} with trained attention weights is available when PyTorch Geometric is installed. These graph-aware node scores replace the pure-KDE scores used in all subsequent route generation stages.
 
-Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files), aggregated from census blocks to tracts, and combined into a demand surface based on job-flow volumes to the top origin-destination pairs. This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
+Employment origin-destination data from the LEHD LODES8 program~\cite{lodes2023} is downloaded for DC, MD, and VA (2021 OD main files). Block-level OD pairs are aggregated to census tract level using an 11-character GEOID prefix, and the top 5,000 OD pairs by job count are retained to keep the demand surface computationally tractable. For each retained pair, the workplace census tract centroid is used as the demand point and weighted by its normalized job-flow volume. The resulting \texttt{demand\_lodes.geojson} provides a set of demand-weighted points that feed directly into the ACO fitness function (see Section~\ref{sec:network_aco}). This commute-pattern-aware signal ensures that major employment clusters---the Pentagon, NIH, Tyson's Corner---receive appropriate demand weighting independent of residential population density.
 
 % --- Figure: KDE Heatmap ---
 \begin{figure}[ht]
@@ -290,15 +307,50 @@ Edges are available if they are unexplored or have been explored up to three tim
 
 \subsection{Network Creation: Iterative Improvement Algorithm}
 
-The iterative improvement method initializes a set of random walks. Walks are scored by the sum of KDE scores for all nodes, indicating transit utility. The lowest-scoring walk is replaced with a higher-scoring walk, and this process is repeated up to 20 times.
+The iterative improvement method initializes a set of random walks. Walks are scored by the sum of KDE scores for all nodes, indicating transit utility. The lowest-scoring walk is replaced with a newly generated walk, and this process is repeated up to 20 times.
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{1\linewidth}
+\begin{algorithmic}
+\Function{IterativeImprovement}{Graph $G$, Positions $P$, KDE $\hat{f}$, $N_{iter}$}
+    \State $(W, T, T') \gets$ \Call{PerformWalks}{$G$, $P$, $N_w$ walks, $T{=}\emptyset$, $T'{=}[]$}
+    \For{$i \gets 1$ to $N_{iter}$}
+        \State $j \gets \arg\min_{k} S_{\mathrm{KDE}}(W_k)$  \Comment{Index of lowest-scoring line}
+        \State $(W', T, T') \gets$ \Call{PerformWalks}{$G$, $P$, $N_w{=}1$, $T$, $T'$}
+        \State $W_j \gets W'[0]$  \Comment{Replace lowest-scoring line}
+    \EndFor
+    \State \Return $W$
+\EndFunction
+\end{algorithmic}
+\caption{Pseudocode for the iterative improvement network generation algorithm.}
+\label{fig:iterative_pseudocode}
+\end{minipage}
+\Description{Iterative improvement algorithm pseudocode}
+\end{figure}
 
 \subsection{Network Creation: Ant Colony Optimisation}
+\label{sec:network_aco}
 
 The ACO stage implements a MAX-MIN Ant System (MMAS)~\cite{stutzle2000mmas} adapted to the Transit Network Design Problem (TNDP)~\cite{nikolic2013aco}. A pheromone matrix $\tau_{uv}$ is maintained over graph edges; each ant constructs a complete 20-route network by probabilistically choosing successive edges according to:
 \[
   P(u \to v) \propto \tau_{uv}^{\alpha} \cdot \eta_{uv}^{\beta}
 \]
-where $\eta_{uv}$ is a KDE- and LODES-weighted heuristic desirability. After each generation, pheromone is deposited in proportion to the fitness of the global-best route set and then clamped to $[\tau_{\min}, \tau_{\max}]$ to prevent premature convergence---a defining property of MMAS~\cite{stutzle2000mmas}. The algorithm runs 20 ants and, in the current pipeline configuration, a single generation; the MMAS framework supports additional generations for further pheromone-guided refinement of the route set~\cite{stutzle2000mmas}. The algorithm applies the same angle and line-length constraints as the random walk algorithm. The ACO network is the default displayed in the Transit Network Viewer.
+where $\eta_{uv} = \text{score}(v) / d(u,v)$ is the heuristic desirability: the GNN-refined node score of the destination divided by the edge length. This edge-selection heuristic is therefore KDE- and topology-aware through the node scoring step, but does not directly incorporate LODES demand at the per-edge level.
+
+LODES employment demand enters through the fitness function used to determine how much pheromone is deposited after each generation:
+\[
+  F = S_{\text{KDE}} + 0.4 \cdot S_{\text{demand}} + 5 \cdot |V_{\text{unique}}| - 30 \cdot R
+\]
+where $S_{\text{KDE}}$ is the sum of KDE scores for all covered nodes, $S_{\text{demand}}$ is the sum of LODES demand scores within 1\,km of each route node (from \texttt{demand\_lodes.geojson}), $|V_{\text{unique}}|$ is the count of distinct nodes covered (rewarding breadth), and $R$ counts duplicate edges across lines (penalizing redundancy). After each generation, pheromone is updated in two steps. First, all pheromone levels evaporate:
+\[
+  \tau_{uv} \leftarrow \max\!\left(\tau_{\min},\; \tau_{uv}\,(1 - \rho)\right)
+\]
+Then, for each edge $(u,v)$ in the global-best route set $\mathcal{R}^*$, pheromone is reinforced:
+\[
+  \tau_{uv} \leftarrow \min\!\left(\tau_{\max},\; \tau_{uv} + \frac{1}{1 + |F^*|}\right)
+\]
+where $F^* = F(\mathcal{R}^*)$ is the global-best fitness, $\rho = 0.1$ is the evaporation rate, $\tau_{\min} = 0.05$, and $\tau_{\max} = 8.0$. These bounds prevent premature convergence---a defining property of MMAS~\cite{stutzle2000mmas}. The algorithm runs 20 ants and, in the current pipeline configuration, a single generation; the MMAS framework supports additional generations for further pheromone-guided refinement of the route set~\cite{stutzle2000mmas}. The algorithm applies the same angle and line-length constraints as the random walk algorithm. The ACO network is the default displayed in the Transit Network Viewer.
 
 \subsection{Network Creation: Genetic Algorithm}
 The genetic algorithm (GA) is a population-based metaheuristic inspired by natural selection. In this project, the GA optimizes rapid transit networks by evolving a population of candidate solutions toward higher fitness according to multiple criteria.
@@ -312,6 +364,49 @@ Each individual represents a candidate transit network, consisting of 20 lines, 
     \item \textbf{Load Penalty:} Penalizes networks with uneven service distribution.
     \item \textbf{Diversity Penalty:} Penalizes networks that are too similar within a generation.
 \end{itemize}
+
+These components are combined as:
+\[
+  F_{GA}(\mathcal{R}) = \sum_{r \in \mathcal{R}} S_{\mathrm{KDE}}(r)
+    + \tfrac{1}{2}\sum_{r \in \mathcal{R}} S_{\mathrm{demand}}(r)
+    + 10\,|V_{\mathrm{unique}}|
+    + 10^3\,B
+    - 50\,R
+    - 20\,L
+    - D
+\]
+where $|V_{\mathrm{unique}}|$ is the total number of distinct nodes covered, $B$ is a service-pattern bonus rewarding lines that connect suburban and dense-core areas, $R$ is the count of duplicate edges across lines, $L$ is the standard deviation of per-node visit counts (load variance), and $D$ is a within-population diversity penalty.
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{1\linewidth}
+\begin{algorithmic}
+\Function{GeneticAlgorithm}{Graph $G$, Positions $P$, KDE $\hat{f}$, $N_{gen}$, $N_{pop}$}
+    \State $\mathcal{P} \gets \{\mathcal{R}_i\}_{i=1}^{N_{pop}}$ where each $\mathcal{R}_i$ is a random set of walks
+    \State $\mathcal{R}^* \gets \arg\max_{\mathcal{R} \in \mathcal{P}}\, F_{GA}(\mathcal{R})$
+    \For{$g \gets 1$ to $N_{gen}$}
+        \State $\mathbf{f} \gets [F_{GA}(\mathcal{R}) \text{ for } \mathcal{R} \in \mathcal{P}]$
+        \If{$\max(\mathbf{f}) > F_{GA}(\mathcal{R}^*)$}
+            \State $\mathcal{R}^* \gets \arg\max \mathbf{f}$
+        \EndIf
+        \State $S \gets $ \Call{Selection}{$\mathcal{P}$, $\mathbf{f}$, $N_{pop}/2$} \Comment{Retain top-scoring half}
+        \State $C \gets [\ ]$
+        \While{$|C| < N_{pop}$}
+            \State $(\mathcal{R}_1, \mathcal{R}_2) \gets$ random pair from $S$
+            \State $(c_1, c_2) \gets$ \Call{Crossover}{$\mathcal{R}_1$, $\mathcal{R}_2$, $G$}
+            \State Append $c_1, c_2$ to $C$
+        \EndWhile
+        \State $\mathcal{P} \gets [\text{\Call{Mutate}{$c$, $G$}} \text{ for } c \in C[{:}N_{pop}]]$
+        \State $\mathcal{P}[0] \gets \mathcal{R}^*$ \Comment{Elitism: preserve best individual}
+    \EndFor
+    \State \Return $\mathcal{R}^*$
+\EndFunction
+\end{algorithmic}
+\caption{Pseudocode for the genetic algorithm network generation procedure. \Call{Crossover}{} performs single-point route-set crossover; \Call{Mutate}{} applies one of three operators (rewire, insert, or remove) to a randomly chosen line.}
+\label{fig:ga_pseudocode}
+\end{minipage}
+\Description{Genetic algorithm pseudocode}
+\end{figure}
 
 Crossover and mutation produce the next generation. Crossover combines parts of two parent networks; mutation introduces random changes. Operators are designed to respect network constraints (valid paths, feasible line lengths). Elitism ensures the best individuals are retained. The algorithm runs for a single generation in the current pipeline configuration; elitism ensures that the best-scoring individuals from the initial population are carried forward. Efficient execution is enabled by Python multiprocessing.
 
@@ -381,8 +476,8 @@ The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}
 region & \texttt{complete\_region\_df.geojson} & Census blocks + transit potential \\
 transit\_points & \texttt{transit.geojson} & Aggregate real-world stops \\
 graph\_points & \texttt{complete\_points.geojson} & Seed points + POIs + transit \\
-network & \texttt{graph.pkl}, \texttt{kde.pkl} & Gabriel graph + KDE scoring \\
-gnn\_scoring & updated pickles & GraphSAGE re-scoring \\
+network & \texttt{graph.pkl}, \texttt{positions.pkl}, \texttt{kde.pkl} & Gabriel graph + KDE scoring \\
+gnn\_scoring & \texttt{gnn\_scores.pkl}, updated \texttt{graph.pkl} & Multi-hop graph aggregation re-scoring \\
 lodes & \texttt{data/lodes/*.parquet} & LODES OD employment data \\
 naive & \texttt{lines\_naive.geojson} & Random-walk network \\
 iterative & \texttt{lines\_iterative.geojson} & Iterative improvement network \\
@@ -408,7 +503,15 @@ Each generated line is classified by right-of-way (ROW) type using OSMnx~\cite{b
 
 \subsection{Construction Cost Estimation}
 
-Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), subway surface (\$80M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$30M surface, \$15M existing rail, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. Shared segments between overlapping lines receive a 50\% cost discount. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
+Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), subway surface (\$80M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$30M surface, \$15M existing rail, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. These components are combined per line as:
+\[
+  C_{\mathrm{line}} = \left(\sum_{s}\frac{d_s}{1000}\cdot r_s \;+\; N_{\mathrm{st}}\,c_{\mathrm{dom}}\right)\times 1.4
+\]
+where $d_s$ is the length of segment $s$ in metres, $r_s$ is the per-km track cost for segment $s$'s ROW type (Table~\ref{tab:rowcosts}), $N_{\mathrm{st}}$ is the number of stations, $c_{\mathrm{dom}}$ is the station cost for the dominant ROW type, and 1.4 is the 40\% contingency multiplier. At the network level, shared infrastructure is discounted:
+\[
+  C_{\mathrm{network}} = \sum_{\ell} C_\ell \cdot \left(1 - 0.5\cdot\frac{|\{e \in E : \mathrm{count}(e) > 1\}|}{|E|}\right)
+\]
+so that segments traversed by more than one line receive approximately a 50\% cost reduction. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
 
 \begin{table}[h]
 \caption{ROW Cost Parameters Used for Capital Estimates}
@@ -472,7 +575,11 @@ The most important feature of the Transit Network Viewer is the Route Finder, wh
 \subsection{Evaluation Methodology}
 I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points in \texttt{complete\_points.geojson} that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
 
-Extended metrics are computed using census block centroids and POP20. \textit{Population Gini} splits each block's population equally across all stations within 500 m and computes the Gini coefficient across station totals. \textit{Population coverage at radii} computes the share of population whose nearest station is within 250 m, 500 m, and 1 km. \textit{High-need coverage} measures the share of top-quartile transit-potential blocks whose centroids are within 500 m of a station. \textit{Service efficiency} is population within 500 m per kilometer of service track; service track length is the sum of line segment lengths stored in each line GeoJSON, so interlined segments are counted multiple times. \textit{Transfer burden} builds a group-adjacency graph from line groupings, then samples up to 10,000 station pairs and BFSes the group graph to estimate minimum transfers, reporting the share of 0-transfer, 1-transfer, and 2+ transfer pairs.
+Extended metrics are computed using census block centroids and POP20. \textit{Population Gini} splits each block's population equally across all stations within 500 m and computes the Gini coefficient across station totals:
+\[
+  G = \frac{2\displaystyle\sum_{i=1}^{n} i\,v_{(i)}}{n\displaystyle\sum_{i=1}^{n} v_{(i)}} - \frac{n+1}{n}
+\]
+where $v_{(1)} \leq v_{(2)} \leq \cdots \leq v_{(n)}$ are the sorted station-level population allocations. $G = 0$ denotes perfect equity (all stations serve equal population); $G = 1$ denotes complete concentration in a single station. \textit{Population coverage at radii} computes the share of population whose nearest station is within 250 m, 500 m, and 1 km. \textit{High-need coverage} measures the share of top-quartile transit-potential blocks whose centroids are within 500 m of a station. \textit{Service efficiency} is population within 500 m per kilometer of service track; service track length is the sum of line segment lengths stored in each line GeoJSON, so interlined segments are counted multiple times. \textit{Transfer burden} builds a group-adjacency graph from line groupings, then samples up to 10,000 station pairs and BFSes the group graph to estimate minimum transfers, reporting the share of 0-transfer, 1-transfer, and 2+ transfer pairs.
 
 % --- Algorithm Network Figures ---
 \begin{figure}[ht]
