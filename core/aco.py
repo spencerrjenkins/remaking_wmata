@@ -211,49 +211,60 @@ def _build_route_set_one_ant(
     total_turn_high: float = 80.0,
     total_turn_reset: float = 30.0,
     max_count: int = 3,
+    max_attempts: int | None = None,
 ) -> list[list[int]]:
     """
     One ant constructs a complete route set of *num_routes* routes.
-    
-    Uses edge counting (count_collector) to track usage and enforce max_count limit.
+
+    This routine is exact-fill: it keeps trying until it reaches the requested
+    number of routes or exhausts a generous attempt budget. If it cannot reach
+    `num_routes`, it raises instead of silently returning too few lines.
     """
     traversed_edges: set = set()  # Edges that have hit max_count usage
     count_collector: dict = defaultdict(int)  # Tracks usage count per edge
     route_set: list[list[int]] = []
     demand_nodes = sorted(node_scores.keys(), key=lambda n: node_scores[n], reverse=True)
     start_pool = demand_nodes[:max(num_routes * 3, 30)]
+    feasible_nodes = [n for n in graph.nodes() if n in positions]
+    max_attempts = max_attempts if max_attempts is not None else max(num_routes * 50, 500)
+    attempts = 0
 
-    for _ in range(num_routes * 5):
-        if len(route_set) >= num_routes:
-            break
-        
-        # Select start node from high-demand nodes, ensuring it's feasible
-        start = None
+    while len(route_set) < num_routes and attempts < max_attempts:
+        attempts += 1
+
+        # Select start node from high-demand nodes when possible.
         if start_pool:
             start = random.choice(start_pool)
+        elif feasible_nodes:
+            start = random.choice(feasible_nodes)
         else:
-            start = random.choice(list(graph.nodes()))
-        
-        # Verify start node is feasible
+            break
+
+        # Verify start node is feasible.
         from geo_constraints import is_point_feasible
         if not is_point_feasible(positions.get(start), forbidden_polygons):
             continue
-        
+
         route, curr_traversed_edges = _build_one_route(
             graph, positions, pheromones, node_scores,
             start, min_distance, max_distance,
             traversed_edges, count_collector, alpha, beta, forbidden_polygons,
             min_angle, total_turn_high, total_turn_reset, max_count,
         )
-        
+
         if route:
             route_set.append(route)
-            # Update edge usage counts
+            # Update edge usage counts.
             for edge in curr_traversed_edges:
                 count_collector[edge] += 1
-                # If edge has reached max usage, add to hard-block set
                 if count_collector[edge] >= max_count:
                     traversed_edges.add(edge)
+
+    if len(route_set) < num_routes:
+        raise RuntimeError(
+            f"ACO could only build {len(route_set)} of {num_routes} requested routes "
+            f"after {attempts} attempts. Increase graph connectivity, relax constraints, or reduce num_routes."
+        )
 
     return route_set
 
@@ -368,6 +379,11 @@ def ant_colony_optimize(
                 num_routes, min_distance, max_distance, alpha, beta, forbidden_polygons,
                 min_angle, total_turn_high, total_turn_reset, max_count,
             )
+            if len(route_set) != num_routes:
+                raise RuntimeError(
+                    f"ACO ant produced {len(route_set)} routes, expected {num_routes}. "
+                    "This indicates the exact-fill guarantee was not satisfied."
+                )
             f = _fitness_route_set(route_set, positions, kde, kde_radius, demand_gdf, demand_radius, demand_weight)
             colony.append(route_set)
             fitnesses.append(f)
