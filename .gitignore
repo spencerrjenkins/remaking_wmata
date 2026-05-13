@@ -20,3 +20,4 @@ data/lodes/
 cache/
 PROJECT_UPDATES.md
 REPORT_COMPILATION_SUMMARY.txt
+osm_row_network.geojson
