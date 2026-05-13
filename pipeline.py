@@ -150,7 +150,7 @@ class PipelineConfig:
     num_walks: int = 20
     min_distance: float = 45_000.0
     max_distance: float = 100_000.0
-    iterative_iterations: int = 100
+    iterative_iterations: int = 20
     min_station_dist: float = 1000.0
     naive_group_threshold: float = 0.5
     iterative_group_threshold: float = 0.5
@@ -416,8 +416,12 @@ def stage_graph_points(cfg: PipelineConfig, force: bool = False) -> None:
     log.info("graph_points: %d total points → %s", len(df_points), out)
 
 
-def stage_network(cfg: PipelineConfig, force: bool = False) -> None:
-    """Build Gabriel graph, contract via Louvain, fit KDE, assign scores, pickle."""
+def stage_network(cfg: PipelineConfig, county_shapes: gpd.GeoDataFrame, force: bool = False) -> None:
+    """Build Gabriel graph, contract via Louvain, fit KDE, assign scores, pickle.
+
+    Nodes are constrained to the provided `county_shapes` to ensure the
+    generated network only contains points inside the study counties.
+    """
     network_out = OUTPUT_DIR / "network.geojson"
     graph_pkl = PICKLE_DIR / "graph.pkl"
     if network_out.exists() and graph_pkl.exists() and not force:
@@ -426,6 +430,14 @@ def stage_network(cfg: PipelineConfig, force: bool = False) -> None:
 
     log.info("network: loading %s …", DATA_DIR / "complete_points.geojson")
     df_points = load_geojson(str(DATA_DIR / "complete_points.geojson"))
+    # Ensure points are in a projected CRS for spatial filtering
+    if df_points.crs is None or df_points.crs.to_epsg() != 3857:
+        df_points = df_points.to_crs(epsg=3857)
+
+    # Filter points to the study county geometries to avoid including
+    # nodes outside the desired counties in the Gabriel graph.
+    df_points = filter_points_in_polygons(df_points, county_shapes.geometry).reset_index(drop=True)
+    log.info("network: %d points after county filter", len(df_points))
     pts_array = np.array(list(zip(df_points.geometry.x, df_points.geometry.y)))
 
     log.info("network: building Gabriel graph (%d points) …", len(df_points))
@@ -533,7 +545,7 @@ def stage_iterative(
             max_distance=cfg.max_distance,
             radius=cfg.kde_radius,
         )
-        if (i + 1) % 25 == 0:
+        if (i + 1) % 10 == 0:
             log.info("iterative: %d/%d done", i + 1, cfg.iterative_iterations)
 
     groups = group_assigner(lines, graph, positions, threshold=cfg.iterative_group_threshold)
@@ -669,7 +681,7 @@ def stage_aco(
         kde,
         num_routes=cfg.num_walks,
         num_ants=20,
-        generations=30,
+        generations=1,
         min_distance=cfg.min_distance,
         max_distance=cfg.max_distance,
         kde_radius=cfg.kde_radius,
@@ -1218,7 +1230,7 @@ def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: i
         "region": lambda: stage_region(cfg, force),
         "transit_points": lambda: stage_transit_points(cfg, county_shapes, force),
         "graph_points": lambda: stage_graph_points(cfg, force),
-        "network": lambda: stage_network(cfg, force),
+        "network": lambda: stage_network(cfg, county_shapes, force),
         "gnn_scoring": lambda: stage_gnn_scoring(cfg, force),
         "lodes": lambda: stage_lodes(cfg, force),
         "naive": lambda: stage_naive(cfg, neighborhoods, force),

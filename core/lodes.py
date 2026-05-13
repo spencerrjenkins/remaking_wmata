@@ -148,7 +148,7 @@ def build_lodes_demand_gdf(
 
     blocks["_geoid_prefix"] = blocks[geoid_col].astype(str).str[:prefix_len]
     centroid_map = (
-        blocks.groupby("_geoid_prefix")
+        blocks.groupby("_geoid_prefix", include_groups=False)
         .apply(lambda g: g.geometry.centroid.unary_union.centroid)
         .to_dict()
     )

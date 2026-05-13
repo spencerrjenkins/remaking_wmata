@@ -506,10 +506,16 @@ function loadLinesGeoJSON(source) {
 // Add UI for toggling
 const linesSourceSelect = document.createElement('select');
 linesSourceSelect.id = 'lines-source-select';
-['lines_iterative', 'lines_genetic', 'lines_naive'].forEach(src => {
+['lines_iterative', 'lines_genetic', 'lines_naive', 'lines_aco'].forEach(src => {
     const opt = document.createElement('option');
     opt.value = src;
-    opt.textContent = src.replace('lines', '').replace('_', ' ').replace('naive', 'Naive Algorithm').replace('iterative', 'Naive Algorithm with Iterative Improvement').replace('genetic', 'Genetic Algorithm');
+    opt.textContent = src
+        .replace('lines', '')
+        .replace('_', ' ')
+        .replace('naive', 'Naive Algorithm')
+        .replace('iterative', 'Naive Algorithm with Iterative Improvement')
+        .replace('genetic', 'Genetic Algorithm')
+        .replace('aco', 'Ant Colony Optimization');
     linesSourceSelect.appendChild(opt);
 });
 linesSourceSelect.onchange = function () {

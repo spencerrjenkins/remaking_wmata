@@ -8,6 +8,39 @@ import pickle
 from geo_constraints import is_point_feasible
 
 
+def is_valid_walk(route, graph, positions=None):
+    if len(route) < 2:
+        return False
+    if len(set(route)) != len(route):
+        return False
+    # Check if all nodes exist in graph
+    if not all(graph.has_node(n) for n in route):
+        return False
+    # Check edges exist
+    if not all(graph.has_edge(a, b) for a, b in zip(route[:-1], route[1:])):
+        return False
+    # Check if all nodes are in positions dict (if provided)
+    if positions is not None:
+        if not all(n in positions for n in route):
+            return False
+    return True
+
+
+def get_walk_distance(route, graph):
+    """Calculate total distance of a walk."""
+    if len(route) < 2:
+        return 0.0
+    return sum(graph[route[i]][route[i+1]]["weight"] for i in range(len(route) - 1))
+
+
+def is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=None):
+    """Validate walk structure and distance constraints."""
+    if not is_valid_walk(route, graph, positions=positions):
+        return False
+    distance = get_walk_distance(route, graph)
+    return min_distance <= distance <= max_distance
+
+
 def fitness(
     route_set,
     positions,
@@ -59,11 +92,12 @@ def selection(population, fitnesses, num_selected):
     return [population[i] for i in selected_indices]
 
 
-def mutate(route_set, graph, positions, mutation_rate=0.3, forbidden_polygons=None):
+def mutate(route_set, graph, positions, mutation_rate=0.3, forbidden_polygons=None, min_distance=20000, max_distance=40000):
     new_set = deepcopy(route_set)
     if random.random() < mutation_rate:
         idx = random.randint(0, len(new_set) - 1)
         route = new_set[idx]
+        original_route = deepcopy(route)
 
         if len(route) < 3:
             return new_set
@@ -97,7 +131,11 @@ def mutate(route_set, graph, positions, mutation_rate=0.3, forbidden_polygons=No
         elif op == "remove" and len(route) > 4:
             del route[random.randint(1, len(route) - 2)]
 
-        new_set[idx] = route
+        # Validate mutation maintains walk validity AND distance constraints
+        if is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions):
+            new_set[idx] = route
+        else:
+            new_set[idx] = original_route
     return new_set
 
 
@@ -149,8 +187,11 @@ def initialize_population(
             complete_traversed_edges=complete_traversed_edges,
             forbidden_polygons=forbidden_polygons,
         )
+        # Validate all walks are properly formed with nodes in positions
         if walks and len(walks) == num_routes:
-            population.append(walks)
+            valid_walks = [w for w in walks if is_valid_walk(w, graph, positions=positions)]
+            if valid_walks and len(valid_walks) == num_routes:
+                population.append(valid_walks)
     return population
 
 
@@ -295,7 +336,7 @@ def genetic_algorithm(
         children = []
         while len(children) < population_size:
             parents = random.sample(selected, 2)
-            child1, child2 = crossover(parents[0], parents[1])
+            child1, child2 = crossover(parents[0], parents[1], graph=graph, positions=positions, min_distance=min_distance, max_distance=max_distance)
             children.extend([child1, child2])
 
         population = [
@@ -305,17 +346,57 @@ def genetic_algorithm(
                 positions,
                 mutation_rate,
                 forbidden_polygons=forbidden_polygons,
+                min_distance=min_distance,
+                max_distance=max_distance,
             )
             for child in children[:population_size]
         ]
+        
+        # Filter out any invalid populations (safety check)
+        population = [
+            ind for ind in population
+            if all(is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions) for route in ind)
+        ]
+        
+        # Regenerate population if too many were filtered out
+        while len(population) < max(2, population_size // 2):
+            parent = random.choice(selected)
+            child = deepcopy(parent)
+            # Apply lighter mutation to restore population
+            if random.random() < 0.5:
+                child = mutate(
+                    child,
+                    graph,
+                    positions,
+                    mutation_rate=0.1,
+                    forbidden_polygons=forbidden_polygons,
+                    min_distance=min_distance,
+                    max_distance=max_distance,
+                )
+            if all(is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions) for route in child):
+                population.append(child)
+
+        # Final population validation - ensure all routes are valid
+        if not population:
+            raise ValueError("Population validation failed: all individuals were filtered out")
+        
+        for ind in population:
+            for route_idx, route in enumerate(ind):
+                # Check each route's validity
+                if not is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions):
+                    raise ValueError(
+                        f"Invalid route found in population: route has nodes not in positions or invalid edges. "
+                        f"Route length: {len(route)}, nodes: {route[:5]}..."
+                    )
 
     return best_solution, best_fitness, log
 
 
-def crossover(parent1, parent2):
+def crossover(parent1, parent2, graph=None, positions=None, min_distance=20000, max_distance=40000):
     """
     Simple one-point crossover for route sets.
     Each parent is a list of routes (walks). Returns two children.
+    If graph is provided, validates distance constraints on child routes.
     """
     if len(parent1) != len(parent2):
         raise ValueError("Parents must have the same number of routes.")
@@ -325,6 +406,18 @@ def crossover(parent1, parent2):
     point = random.randint(1, n - 1)
     child1 = deepcopy(parent1[:point]) + deepcopy(parent2[point:])
     child2 = deepcopy(parent2[:point]) + deepcopy(parent1[point:])
+    
+    # Validate distance constraints if graph is provided
+    if graph is not None:
+        # For child1, replace any invalid routes with parent versions
+        for i, route in enumerate(child1):
+            if not is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions):
+                child1[i] = deepcopy(parent1[i])
+        # For child2, replace any invalid routes with parent versions
+        for i, route in enumerate(child2):
+            if not is_valid_walk_with_distance(route, graph, min_distance, max_distance, positions=positions):
+                child2[i] = deepcopy(parent2[i])
+    
     return child1, child2
 
 

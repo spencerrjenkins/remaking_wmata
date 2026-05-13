@@ -74,6 +74,58 @@ def _cache_path(data_dir: Path) -> Path:
     return data_dir / "osm_row_network.json"
 
 
+def _bbox_area(bbox: tuple[float, float, float, float]) -> float:
+    west, south, east, north = bbox
+    return abs((east - west) * (north - south))
+
+
+def _split_bbox(bbox: tuple[float, float, float, float]) -> list[tuple[float, float, float, float]]:
+    west, south, east, north = bbox
+    mid_x = (west + east) / 2
+    mid_y = (south + north) / 2
+    return [
+        (west, south, mid_x, mid_y),
+        (mid_x, south, east, mid_y),
+        (west, mid_y, mid_x, north),
+        (mid_x, mid_y, east, north),
+    ]
+
+
+def _download_graph_with_fallbacks(
+    ox,
+    bbox: tuple[float, float, float, float],
+    *,
+    custom_filter: str,
+    network_type: str,
+    retain_all: bool = False,
+    max_depth: int = 3,
+) -> list:
+    """Download graph data for a bbox, recursively subdividing on transient failures."""
+    try:
+        return [ox.graph_from_bbox(bbox, custom_filter=custom_filter, network_type=network_type, retain_all=retain_all)]
+    except Exception as exc:
+        if max_depth <= 0 or _bbox_area(bbox) < 0.01:
+            raise
+        log.info("row_snap: bbox download failed (%s); subdividing and retrying", exc)
+
+    graphs = []
+    for child_bbox in _split_bbox(bbox):
+        try:
+            graphs.extend(
+                _download_graph_with_fallbacks(
+                    ox,
+                    child_bbox,
+                    custom_filter=custom_filter,
+                    network_type=network_type,
+                    retain_all=retain_all,
+                    max_depth=max_depth - 1,
+                )
+            )
+        except Exception as exc:
+            log.warning("row_snap: OSM sub-bbox failed (%s)", exc)
+    return graphs
+
+
 def load_or_download_osm_network(
     study_bounds: tuple[float, float, float, float],
     data_dir: Path,
@@ -105,8 +157,21 @@ def load_or_download_osm_network(
         drive_cf = '["highway"]["highway"!~"footway|cycleway|path|service"]'
         rail_cf = '["railway"~"rail|subway|light_rail|tram"]'
 
-        G_drive = ox.graph_from_bbox(north, south, east, west, custom_filter=drive_cf, network_type="drive")
-        G_rail  = ox.graph_from_bbox(north, south, east, west, custom_filter=rail_cf, retain_all=True)
+        bbox = (west, south, east, north)
+        drive_graphs = _download_graph_with_fallbacks(
+            ox,
+            bbox,
+            custom_filter=drive_cf,
+            network_type="drive",
+            retain_all=False,
+        )
+        rail_graphs = _download_graph_with_fallbacks(
+            ox,
+            bbox,
+            custom_filter=rail_cf,
+            network_type="all",
+            retain_all=True,
+        )
 
         # Merge into a simple edge list (lon, lat pairs + tags)
         edges = []
@@ -130,8 +195,10 @@ def load_or_download_osm_network(
                     "tags": tags,
                 })
 
-        _add_edges_from_graph(G_drive)
-        _add_edges_from_graph(G_rail)
+        for graph in drive_graphs:
+            _add_edges_from_graph(graph)
+        for graph in rail_graphs:
+            _add_edges_from_graph(graph)
 
         result = {"edges": edges}
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -170,7 +237,7 @@ class ROWIndex:
         """Return the ROW type of the nearest OSM edge within *radius* metres."""
         if self._tree is None:
             return "unknown"
-        idxs = self._tree.query_ball_point([x, y], r=radius)
+        idxs = self._tree.query_ball_point([x, y], r=radius, p=2)
         if not idxs:
             return "street"  # fallback: assume street if nothing nearby within radius
         # Among candidates, pick the highest-priority ROW type
@@ -269,7 +336,7 @@ def snapped_line_geojson_coords(
         x, y = positions[n]
         # Snap node to nearest ROW edge midpoint
         if index._tree is not None:
-            idxs = index._tree.query_ball_point([x, y], r=lookup_radius)
+            idxs = index._tree.query_ball_point([x, y], r=lookup_radius, p=2)
             if idxs:
                 candidates = [index._edges[i] for i in idxs]
                 # Project (x,y) onto nearest edge

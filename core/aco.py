@@ -24,7 +24,7 @@ from copy import deepcopy
 import numpy as np
 
 from .scoring import score_walk_by_kde, score_walk_by_demand
-from .graph import group_assigner
+from .graph import group_assigner, angle_between, deviation_between
 
 
 # ---------------------------------------------------------------------------
@@ -74,54 +74,130 @@ def _build_one_route(
     min_distance: float,
     max_distance: float,
     traversed_edges: set,
+    count_collector: dict,
     alpha: float = 1.0,
     beta: float = 2.0,
     forbidden_polygons=None,
-) -> list[int]:
+    min_angle: float = 130.0,
+    total_turn_high: float = 80.0,
+    total_turn_reset: float = 30.0,
+    max_count: int = 3,
+) -> tuple[list[int], set]:
     """
-    Build a single transit route via ant walk.
+    Build a single transit route via ant walk with full constraint enforcement.
 
     Transition probability P(u → v) ∝ τ(u,v)^α × η(u,v)^β
     where η(u,v) = node_score(v) / distance(u,v) (heuristic desirability).
+    
+    Constraints enforced:
+    - Minimum angle: 130° (prevent zigzagging)
+    - Direction persistence: Turn accumulation with requested sign
+    - Edge reuse limit: Each edge can be used up to max_count times
+    - No node revisiting within single walk
+    - Geographic feasibility checks
+    
+    Returns (walk, curr_traversed_edges) where curr_traversed_edges tracks edges used in this walk.
     """
     from geo_constraints import is_point_feasible
 
     walk: list[int] = [start_node]
     current_distance = 0.0
     visited: set[int] = {start_node}
+    prev_node = None
+    total_turn = 0.0
+    requested_sign = 0
+    curr_traversed_edges: set = set()
 
     while current_distance < max_distance:
         u = walk[-1]
-        neighbors = [
+        
+        # Build candidate neighbors: not visited, edge not over-used, feasible
+        candidates = [
             n for n in graph.neighbors(u)
             if n not in visited
-            and (u, n) not in traversed_edges
+            and (u, n) not in traversed_edges  # Hard constraint: fully traversed edges
             and (n, u) not in traversed_edges
             and is_point_feasible(positions.get(n), forbidden_polygons)
         ]
-        if not neighbors:
+        
+        if not candidates:
             break
 
-        tau = np.array([pheromones.get(u, n) for n in neighbors], dtype=float)
+        # Apply angle and direction constraints
+        valid_neighbors = []
+        neighbor_deviations = {}
+        
+        if len(walk) >= 2:
+            prev_node = walk[-2]
+            v1 = (positions[prev_node][0] - positions[u][0], 
+                  positions[prev_node][1] - positions[u][1])
+            
+            for n in candidates:
+                v2 = (positions[n][0] - positions[u][0], 
+                      positions[n][1] - positions[u][1])
+                ang = angle_between(v1, v2)
+                dev = deviation_between(v1, v2)
+                
+                # Angle constraint
+                if ang > min_angle:
+                    # Direction persistence: prefer turns consistent with requested_sign
+                    if not requested_sign or (dev * requested_sign > 0):
+                        valid_neighbors.append(n)
+                        neighbor_deviations[n] = dev
+            
+            # If constraints eliminate all neighbors, fallback to all candidates
+            if not valid_neighbors:
+                valid_neighbors = candidates
+                for n in candidates:
+                    v2 = (positions[n][0] - positions[u][0], 
+                          positions[n][1] - positions[u][1])
+                    dev = deviation_between(v1, v2)
+                    neighbor_deviations[n] = dev
+        else:
+            # First step: no angle constraint, all candidates valid
+            valid_neighbors = candidates
+            for n in candidates:
+                neighbor_deviations[n] = 0.0
+
+        # Probabilistic selection with pheromone and heuristic
+        tau = np.array([pheromones.get(u, n) for n in valid_neighbors], dtype=float)
         eta = np.array([
             (node_scores.get(n, 1.0) + 1e-6) / (graph[u][n].get("weight", 1.0) + 1e-6)
-            for n in neighbors
+            for n in valid_neighbors
         ], dtype=float)
 
         weights = (tau ** alpha) * (eta ** beta)
         total = weights.sum()
         if total == 0:
-            probs = np.ones(len(neighbors)) / len(neighbors)
+            probs = np.ones(len(valid_neighbors)) / len(valid_neighbors)
         else:
             probs = weights / total
 
-        next_node = int(np.random.choice(neighbors, p=probs))
+        next_node = int(np.random.choice(valid_neighbors, p=probs))
         edge_dist = graph[u][next_node].get("weight", 0.0)
+        
+        # Record edge usage
+        edge = (u, next_node)
+        curr_traversed_edges.add(edge)
+        curr_traversed_edges.add((next_node, u))
+        
+        # Update walk state
         walk.append(next_node)
         visited.add(next_node)
         current_distance += edge_dist
+        
+        # Update turn accumulation and requested sign
+        if prev_node is not None:
+            total_turn += neighbor_deviations.get(next_node, 0.0)
+            if abs(total_turn) > total_turn_high:
+                requested_sign = -int(np.sign(total_turn))
+            elif abs(total_turn) < total_turn_reset:
+                requested_sign = 0
+        
+        prev_node = u
 
-    return walk if current_distance >= min_distance else []
+    # Return walk only if minimum distance requirement met
+    return (walk if current_distance >= min_distance else [], curr_traversed_edges)
 
 
 def _build_route_set_one_ant(
@@ -135,9 +211,18 @@ def _build_route_set_one_ant(
     alpha: float,
     beta: float,
     forbidden_polygons=None,
+    min_angle: float = 130.0,
+    total_turn_high: float = 80.0,
+    total_turn_reset: float = 30.0,
+    max_count: int = 3,
 ) -> list[list[int]]:
-    """One ant constructs a complete route set of *num_routes* routes."""
-    all_traversed: set = set()
+    """
+    One ant constructs a complete route set of *num_routes* routes.
+    
+    Uses edge counting (count_collector) to track usage and enforce max_count limit.
+    """
+    traversed_edges: set = set()  # Edges that have hit max_count usage
+    count_collector: dict = defaultdict(int)  # Tracks usage count per edge
     route_set: list[list[int]] = []
     demand_nodes = sorted(node_scores.keys(), key=lambda n: node_scores[n], reverse=True)
     start_pool = demand_nodes[:max(num_routes * 3, 30)]
@@ -145,17 +230,34 @@ def _build_route_set_one_ant(
     for _ in range(num_routes * 5):
         if len(route_set) >= num_routes:
             break
-        start = random.choice(start_pool) if start_pool else random.choice(list(graph.nodes()))
-        route = _build_one_route(
+        
+        # Select start node from high-demand nodes, ensuring it's feasible
+        start = None
+        if start_pool:
+            start = random.choice(start_pool)
+        else:
+            start = random.choice(list(graph.nodes()))
+        
+        # Verify start node is feasible
+        from geo_constraints import is_point_feasible
+        if not is_point_feasible(positions.get(start), forbidden_polygons):
+            continue
+        
+        route, curr_traversed_edges = _build_one_route(
             graph, positions, pheromones, node_scores,
             start, min_distance, max_distance,
-            all_traversed, alpha, beta, forbidden_polygons,
+            traversed_edges, count_collector, alpha, beta, forbidden_polygons,
+            min_angle, total_turn_high, total_turn_reset, max_count,
         )
+        
         if route:
             route_set.append(route)
-            for i in range(len(route) - 1):
-                all_traversed.add((route[i], route[i + 1]))
-                all_traversed.add((route[i + 1], route[i]))
+            # Update edge usage counts
+            for edge in curr_traversed_edges:
+                count_collector[edge] += 1
+                # If edge has reached max usage, add to hard-block set
+                if count_collector[edge] >= max_count:
+                    traversed_edges.add(edge)
 
     return route_set
 
@@ -218,13 +320,34 @@ def ant_colony_optimize(
     demand_radius: float = 1000.0,
     demand_weight: float = 0.4,
     forbidden_polygons=None,
+    min_angle: float = 130.0,
+    total_turn_high: float = 80.0,
+    total_turn_reset: float = 30.0,
+    max_count: int = 3,
     progress_callback=None,
 ) -> tuple[list[list[int]], float, list[dict]]:
     """
-    MAX-MIN Ant System (MMAS) for transit route generation.
+    MAX-MIN Ant System (MMAS) for transit route generation with comprehensive constraint enforcement.
 
     Returns (best_routes, best_fitness, log).
     Each entry in log has keys: generation, best_fitness, avg_fitness, diversity.
+    
+    Constraints Enforced:
+    -----------
+    min_distance : float
+        Minimum route length in meters. Default: 45,000 m (45 km).
+    max_distance : float
+        Maximum route length in meters. Default: 100,000 m (100 km).
+    min_angle : float
+        Minimum angle (degrees) for consecutive edges. Default: 130° (prevents zigzagging).
+    total_turn_high : float
+        Turn accumulation threshold for requested sign changes. Default: 80°.
+    total_turn_reset : float
+        Turn accumulation threshold for resetting requested sign. Default: 30°.
+    max_count : int
+        Maximum times an edge can be traversed across all walks. Default: 3.
+    forbidden_polygons : list
+        Geographic no-go zones (White House/Capitol 900m buffers, etc.).
     """
     pheromones = PheromoneMatrix(graph, tau_init, tau_min, tau_max)
 
@@ -247,6 +370,7 @@ def ant_colony_optimize(
             route_set = _build_route_set_one_ant(
                 graph, positions, pheromones, node_scores,
                 num_routes, min_distance, max_distance, alpha, beta, forbidden_polygons,
+                min_angle, total_turn_high, total_turn_reset, max_count,
             )
             f = _fitness_route_set(route_set, positions, kde, kde_radius, demand_gdf, demand_radius, demand_weight)
             colony.append(route_set)

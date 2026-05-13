@@ -102,7 +102,14 @@ def save_lines_to_geojson(
     features = []
     for idx, line in enumerate(lines):
         station_lookup = node_station_status or {}
-        line_nodes = [n for n in line if n in positions]
+        if any(n not in positions for n in line):
+            continue
+        line_nodes = list(line)
+        if any(
+            not (graph.has_edge(a, b) or graph.has_edge(b, a))
+            for a, b in zip(line_nodes[:-1], line_nodes[1:])
+        ):
+            continue
         coords = [to_latlon(positions[n]) for n in line_nodes]
         if len(coords) < 2:
             continue
