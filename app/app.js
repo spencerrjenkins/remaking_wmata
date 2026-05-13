@@ -57,6 +57,11 @@ function roundCoord(coord) {
     return [Number(coord[0].toFixed(6)), Number(coord[1].toFixed(6))].sort();
 }
 
+function getStationNameByCoord(coord, fallback = 'Unnamed station') {
+    const key = roundCoord(coord).join(',');
+    return stationNameByCoord[key] || fallback;
+}
+
 // Store which lines stop at each vertex
 const vertexLineMap = {};
 const vertexKDEMap = {};
@@ -298,12 +303,16 @@ function loadLinesGeoJSON(source) {
         (data.features || []).forEach((feature, i) => {
             const coords = feature.geometry.coordinates;
             const isStationArr = feature.properties.is_station || [];
+            const nameList = feature.properties.name_list || [];
             coords.forEach((coord, idx) => {
                 const key = roundCoord(coord).join(',');
                 if (isStationArr.length > idx) {
                     stationStatusByCoord[key] = isStationArr[idx];
                 } else {
                     stationStatusByCoord[key] = true; // fallback: treat as station
+                }
+                if (nameList[idx]) {
+                    stationNameByCoord[key] = nameList[idx];
                 }
             });
         });
@@ -514,6 +523,7 @@ loadLinesGeoJSON(currentLinesSource);
 
 // Store is_station info for each node globally
 const stationStatusByCoord = {};
+const stationNameByCoord = {};
 
 // --- Real-World Transit Network Layer ---
 let realWorldNetworkLayer = null;
@@ -797,6 +807,8 @@ routeFinderBtn.onclick = () => {
         routeFinderState = 'selectingStart';
         routeStart = null;
         routeEnd = null;
+        routeFinderBtn.dataset.originStation = '';
+        routeFinderBtn.dataset.destinationStation = '';
         if (routeHighlightLayer) { map.removeLayer(routeHighlightLayer); routeHighlightLayer = null; }
         routeNodeMarkers.forEach(m => map.removeLayer(m));
         routeNodeMarkers = [];
@@ -814,6 +826,8 @@ routeFinderBtn.onclick = () => {
     routeFinderState = 'selectingStart';
     routeStart = null;
     routeEnd = null;
+    routeFinderBtn.dataset.originStation = '';
+    routeFinderBtn.dataset.destinationStation = '';
     if (routeHighlightLayer) { map.removeLayer(routeHighlightLayer); routeHighlightLayer = null; }
     routeNodeMarkers.forEach(m => map.removeLayer(m));
     routeNodeMarkers = [];
@@ -992,23 +1006,8 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                 const node = path[i];
                 const coord = linesGraph.nodes[node];
                 if (!coord) continue;
-                const key = roundCoord(coord).join(',');
-                // Try to get the station name from the marker or from a global mapping
-                let stationName = '';
-                // Try to find a marker at this location
-                for (const markers of Object.values(lineMarkers)) {
-                    for (const m of markers) {
-                        if (m.getLatLng().lat === coord[0] && m.getLatLng().lng === coord[1]) {
-                            // Parse name from tooltip HTML
-                            const tt = m.getTooltip();
-                            if (tt && tt._content) {
-                                const match = tt._content.match(/<b>(.*?)<\/b>/);
-                                if (match) stationName = match[1];
-                            }
-                        }
-                    }
-                }
-                if (stationName) intermediateStations.push(stationName);
+                const stationName = getStationNameByCoord(coord);
+                intermediateStations.push(stationName);
             }
             routeFinderResult.innerHTML =
                 `<b>Route:</b> ${walkSummaryStart}${lineSequence.map(l => `Line ${l}`).join(' → ')}${walkDistanceStrEnd}` +
@@ -1046,6 +1045,8 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                     routeFinderState = 'idle';
                     routeStart = null;
                     routeEnd = null;
+                    routeFinderBtn.dataset.originStation = '';
+                    routeFinderBtn.dataset.destinationStation = '';
                     if (routeHighlightLayer) { map.removeLayer(routeHighlightLayer); routeHighlightLayer = null; }
                     routeNodeMarkers.forEach(m => map.removeLayer(m));
                     routeNodeMarkers = [];
@@ -1148,7 +1149,9 @@ map.on('click', function (e) {
         // Save as start
         routeStart = nearestKey;
         routeFinderState = 'selectingEnd';
-        routeFinderStatus.textContent = 'Click the destination.';
+        const originName = getStationNameByCoord(nearestCoord);
+        routeFinderBtn.dataset.originStation = originName;
+        routeFinderStatus.innerHTML = `<b>Origin:</b> ${originName}<br>Click the destination.`;
         const m = L.circleMarker([nearestCoord[0], nearestCoord[1]], { radius: 12, color: 'green', fillOpacity: 0.7 }).addTo(map);
         routeNodeMarkers.push(m);
         routeFinderBtn.textContent = 'clear';
@@ -1172,6 +1175,8 @@ map.on('click', function (e) {
         clickEndDist = map.distance([lat, lng], [nearestCoord[0], nearestCoord[1]]);
         // Save as end
         routeEnd = nearestKey;
+        const destinationName = getStationNameByCoord(nearestCoord);
+        routeFinderBtn.dataset.destinationStation = destinationName;
         routeFinderState = 'idle';
         const m = L.circleMarker([nearestCoord[0], nearestCoord[1]], { radius: 12, color: 'red', fillOpacity: 0.7 }).addTo(map);
         routeNodeMarkers.push(m);
@@ -1308,23 +1313,7 @@ map.on('click', function (e) {
             const node = path[i];
             const coord = linesGraph.nodes[node];
             if (!coord) continue;
-            const key = roundCoord(coord).join(',');
-            // Try to get the station name from the marker or from a global mapping
-            let stationName = '';
-            // Try to find a marker at this location
-            for (const markers of Object.values(lineMarkers)) {
-                for (const m of markers) {
-                    if (m.getLatLng().lat === coord[0] && m.getLatLng().lng === coord[1]) {
-                        // Parse name from tooltip HTML
-                        const tt = m.getTooltip();
-                        if (tt && tt._content) {
-                            const match = tt._content.match(/<b>(.*?)<\/b>/);
-                            if (match) stationName = match[1];
-                        }
-                    }
-                }
-            }
-            if (!stationName) stationName = 'Unnamed station';
+            const stationName = getStationNameByCoord(coord);
             intermediateStations.push(stationName);
         }
         routeFinderResult.innerHTML =
@@ -1363,6 +1352,8 @@ map.on('click', function (e) {
                 routeFinderState = 'idle';
                 routeStart = null;
                 routeEnd = null;
+                routeFinderBtn.dataset.originStation = '';
+                routeFinderBtn.dataset.destinationStation = '';
                 if (routeHighlightLayer) { map.removeLayer(routeHighlightLayer); routeHighlightLayer = null; }
                 routeNodeMarkers.forEach(m => map.removeLayer(m));
                 routeNodeMarkers = [];

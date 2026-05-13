@@ -17,7 +17,7 @@
 \renewcommand{\shortauthors}{S. Jenkins}
 
 \begin{abstract}
-This paper presents a computational framework for the design and economic evaluation of reimagined rapid transit networks for the Washington, DC metropolitan area. Motivated by the historical limitations of the existing WMATA system, this study leverages geospatial analysis, graph neural networks, and multiple optimization metaheuristics---including a genetic algorithm and a MAX-MIN Ant Colony System~\cite{stutzle2000mmas,nikolic2013aco}---to generate and evaluate alternative transit networks. Origin-destination employment data from the LEHD LODES dataset~\cite{lodes2023} augments population-based demand signals, while OpenStreetMap right-of-way classification~\cite{boeing2017osmnx} enables per-segment construction cost estimation calibrated to FTA benchmarks~\cite{fta2023ntd,flyvbjerg2003overruns}. A doubly-constrained gravity model~\cite{wilson1971gravity} calibrated to WMATA ridership provides station-level boarding estimates disaggregated by time of day. The resulting networks outperform the real-world WMATA network on key coverage metrics: critical coverage (up to 24.1\%), neighborhood coverage (up to 6.6\%), and average distance to the nearest station (as low as 0.92 km in DC). These results demonstrate the potential of data-driven, algorithmically optimized approaches to improve urban mobility, equity, and fiscal feasibility in transit planning.
+This paper presents a computational framework for the design and economic evaluation of reimagined rapid transit networks for the Washington, DC metropolitan area. Motivated by the historical limitations of the existing WMATA system, this study leverages geospatial analysis, graph neural networks, and multiple optimization metaheuristics---including a genetic algorithm and a MAX-MIN Ant Colony System~\cite{stutzle2000mmas,nikolic2013aco}---to generate and evaluate alternative transit networks. Origin-destination employment data from the LEHD LODES dataset~\cite{lodes2023} augments population-based demand signals, while OpenStreetMap right-of-way classification~\cite{boeing2017osmnx} enables per-segment construction cost estimation calibrated to FTA benchmarks~\cite{fta2023ntd,flyvbjerg2003overruns}. A doubly-constrained gravity model~\cite{wilson1971gravity} calibrated to a WMATA-scale ridership target provides station-level boarding estimates disaggregated by time of day. The resulting networks outperform the real-world WMATA network on key coverage metrics: point coverage (up to 32.7\%), neighborhood coverage (up to 12.3\%), and average distance to the nearest station (as low as 0.85 km in DC). These results demonstrate the potential of data-driven, algorithmically optimized approaches to improve urban mobility, equity, and fiscal feasibility in transit planning.
 \end{abstract}
 
 \maketitle
@@ -26,7 +26,7 @@ This paper presents a computational framework for the design and economic evalua
 
 \section{Introduction}
 
-Public transportation is a vital component of urban infrastructure, contributing to economic productivity~\cite{lit:us_transit_policy}, social equity~\cite{lit:equity}, and environmental sustainability~\cite{lit:us_transit_policy} in metropolitan areas. Washington, DC, and its surrounding areas in Maryland and Virginia, comprise the second-largest rapid transit network in the United States by daily ridership~\cite{lit:wmata_stats}. The network consists of six heavy rail lines spanning 208 kilometers and connecting 98 stations, operated by the Washington Metropolitan Area Transit Authority (WMATA)~\cite{lit:wmata_stats}. In 2019, the Washington Metro provided over 160 million trips per year, including work commutes, tourism, and other purposes~\cite{lit:wmata_stats}. Figure~\ref{fig:wmata} provides a reference for the existing transit network, which is compared to the generated networks throughout this study. 
+Public transportation is a vital component of urban infrastructure, contributing to economic productivity~\cite{lit:us_transit_policy}, social equity~\cite{lit:equity}, and environmental sustainability~\cite{lit:us_transit_policy} in metropolitan areas. Washington, DC, and its surrounding areas in Maryland and Virginia, are served by a six-line heavy rail system spanning about 208 kilometers and connecting 98 stations, operated by the Washington Metropolitan Area Transit Authority (WMATA)~\cite{lit:wmata_wikipedia}. Recent annual ridership is on the order of hundreds of millions of trips~\cite{lit:wmata_wikipedia}. Figure~\ref{fig:wmata} provides a reference for the existing transit network, which is compared to the generated networks throughout this study. 
 % --- Figure: Real-World Transit Network ---
 \begin{figure}[ht]
     \centering
@@ -40,7 +40,7 @@ A primary goal in designing public transit networks in the U.S. is to reduce car
 
 The limited success of the Washington Metro in attracting ridership is largely attributable to the priorities at the time of its planning~\cite{lit:wmata_history}. Unlike older East Coast cities with legacy rail systems, the Metro was conceived in the 1950s, an era of expanding car infrastructure and urban expressways. The Metro was designed as a compromise, connecting car commuters to the city center, with expansions primarily serving suburban areas~\cite{lit:wmata_history}. As a result, the network remains largely radial and focused on suburban commuters.
 
-This design philosophy limits practical use. The network makes suburb-to-suburb and circumferential travel difficult, often requiring passengers to travel into the city center and transfer, even for short cross-town trips~\cite{lit:wmata_stats}. High-density neighborhoods such as Georgetown and marginalized areas like Anacostia have been historically underserved due to political, financial, and social factors~\cite{lit:equity}. Despite significant investment, the Metro has not achieved a substantial reduction in vehicle miles traveled (VMT) or car dependency~\cite{lit:env}. The static nature of the network has also hindered adaptation to shifting population centers and job clusters.
+This design philosophy limits practical use. The largely radial structure makes suburb-to-suburb and circumferential travel difficult, often requiring trips to route through the core and transfer. High-density neighborhoods such as Georgetown and marginalized areas like Anacostia have been historically underserved due to political, financial, and social factors~\cite{lit:equity}. Despite significant investment, the Metro has not achieved a substantial reduction in vehicle miles traveled (VMT) or car dependency~\cite{lit:env}. The static nature of the network has also hindered adaptation to shifting population centers and job clusters.
 
 The persistent gaps in the current network's ability to connect high-density and underserved regions further motivate a new approach. For example, the lack of direct connections between major suburban job centers or marginalized neighborhoods limits economic opportunity and social inclusion~\cite{lit:equity}. Existing evaluation frameworks may overlook these gaps, focusing on aggregate metrics that mask disparities in access and service quality.
 
@@ -108,7 +108,7 @@ A variety of algorithmic approaches have been proposed for generating and optimi
 
 Graph neural network approaches have recently been applied to transportation demand modeling. Hamilton et al.~\cite{hamilton2017graphsage} introduce GraphSAGE, an inductive representation learning framework that propagates neighborhood features through mean aggregation. Veličković et al.~\cite{velickovic2018gat} extend this with attention-weighted aggregation (Graph Attention Networks), enabling nodes to selectively weight neighbors by demand-signal relevance. This study applies a numpy-only GraphSAGE approximation to re-score graph nodes beyond KDE density, incorporating multi-hop demand propagation. Employment origin-destination data from the U.S. Census LEHD LODES program~\cite{lodes2023} is used to build commute-pattern-aware demand surfaces that supplement the population-based signal.
 
-Construction cost estimation draws on FTA National Transit Database benchmarks~\cite{fta2023ntd} and Halcrow Fox per-km multipliers~\cite{halcrow2000cost}, with a contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of 258 infrastructure projects, which documents a systematic 44.7\% average rail overrun. Right-of-way classification uses OSMnx~\cite{boeing2017osmnx}, following a simplified map-matching strategy in the spirit of Newson and Krumm~\cite{newson2009mapmatching}. Ridership estimation uses Wilson's~\cite{wilson1971gravity} doubly-constrained gravity model, whose calibration is informed by observed WMATA ridership patterns studied by Zhao et al.~\cite{zhao2022ridership}.
+Construction cost estimation draws on FTA National Transit Database benchmarks~\cite{fta2023ntd} and Halcrow Fox per-km multipliers~\cite{halcrow2000cost}, with a contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of 258 infrastructure projects, which documents a systematic 44.7\% average rail overrun. Right-of-way classification uses OSMnx~\cite{boeing2017osmnx}, following a simplified map-matching strategy in the spirit of Newson and Krumm~\cite{newson2009mapmatching}. Ridership estimation uses Wilson's~\cite{wilson1971gravity} doubly-constrained gravity model, whose calibration is informed by observed ridership patterns in prior gravity-model studies such as Zhao et al.~\cite{zhao2022ridership}.
 
 Recent work has emphasized the importance of equity and real-world constraints in transit planning. Camporeale et al.~\cite{camporeale2016equity} discuss the quantification of horizontal and vertical equity in route planning, motivating the inclusion of coverage metrics for both high-density and underserved areas. Extensions to other modes, such as smart transit and high-speed rail, are explored by P\'erivier et al.~\cite{perivier2021realtime} and Roy and Maji~\cite{roy2023hsr}, whose methodologies for station location optimization and real-time routing offer inspiration for future work.
 
@@ -127,7 +127,7 @@ The first step is to define the study area. Table~\ref{tab:counties} lists the c
     \Description{A map highlighting the counties and districts included in the Washington, DC metropolitan area for the study.}
 \end{figure}
 
-Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau TIGER/Line tabblock20 shapefiles~\cite{lit:tiger2023}. Transit potential for each block is calculated as population divided by area. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
+Data for the Washington Metropolitan Area is available from Open Data DC, Open Data MD, and the Virginia Open Data Portal~\cite{lit:opendata}. Census block population data is obtained from the US Census Bureau TIGER/Line tabblock20 shapefiles~\cite{lit:tiger2023}. Transit potential for each block is derived from population density (population divided by land plus water area) and transformed using $\log(1 + \mathrm{density})$ to form a point-likelihood surface. Figure~\ref{fig:city_map} shows the census block boundaries used for population and density analysis.
 
 % --- Figure: Census Block Map ---
 \begin{figure}[ht]
@@ -138,7 +138,7 @@ Data for the Washington Metropolitan Area is available from Open Data DC, Open D
     \Description{A map showing the boundaries of census blocks in the Washington, DC area, used for population and density analysis.}
 \end{figure}
 
-The census block data is transformed by taking the log of the population density. A recursive spatial tree algorithm identifies the highest-need locations for transit, using a depth of 8, and detailed in Figure \ref{fig:get_points_pseudocode}. The resulting points represent locations with the highest need for transit based on population. Figure~\ref{fig:point_likelihood} visualizes the transformed census block data used to identify high-need locations for transit.
+The census block data is transformed by taking $\log(1 + \mathrm{density})$. A recursive spatial tree algorithm identifies the highest-need locations for transit, using a depth of 8, and detailed in Figure \ref{fig:get_points_pseudocode}. The resulting points represent locations with the highest need for transit based on population. Figure~\ref{fig:point_likelihood} visualizes the transformed census block data used to identify high-need locations for transit.
 
 \begin{figure}[h]
 \centering
@@ -431,7 +431,7 @@ Station boardings are estimated using a doubly-constrained gravity model~\cite{w
 \[
   T_{ij} \propto O_i \cdot D_j \cdot \exp(-\beta \cdot d_{ij})
 \]
-where $O_i$ and $D_j$ are origin and destination demand signals combining population density and LODES employment OD flows~\cite{lodes2023}, and $d_{ij}$ is Euclidean distance between stations and demand points within an 800 m catchment. The model uses $\beta = 0.0008$ and is calibrated to WMATA's FY2023 ridership of approximately 350,000 daily boardings~\cite{lit:wmata_stats}. Daily totals are disaggregated by time of day using WMATA's observed ridership profile: early AM 4\%, AM peak 26\%, midday 30\%, PM peak 27\%, evening 11\%, and late night 2\%. Station-level boardings and hourly profiles are stored in the output GeoJSON and visualized in the Transit Network Viewer as interactive sparkline charts.
+where $O_i$ and $D_j$ are origin and destination demand signals combining population density and LODES employment OD flows~\cite{lodes2023}, and $d_{ij}$ is Euclidean distance between stations and demand points within an 800 m catchment. The model uses $\beta = 0.0008$ and is calibrated to a daily ridership target of 350{,}000 boardings (project baseline). Daily totals are disaggregated by time of day using a WMATA-inspired profile: early AM 4\%, AM peak 26\%, midday 30\%, PM peak 27\%, evening 11\%, and late night 2\%. Station-level boardings and hourly profiles are stored in the output GeoJSON and visualized in the Transit Network Viewer as interactive sparkline charts.
 
 \section{Network Visualization and Exploration}
 
@@ -463,11 +463,14 @@ The web application's interface centers around a mapping tool powered by Leaflet
     \Description{A screenshot of the Transit Network Viewer showing a suburban-to-suburban route selection.}
 \end{figure}
 
-The most important feature of the Transit Network Viewer is the Route Finder, which users can use to calculate the travel time between selected start and end locations. The route is determined using Dijkstra's algorithm, with a penalty incurred for every time a route requires a transfer. If the user selects start and end locations that are not at stations, walking time estimates are included for the parts of the itinerary both before and after the trip through the metro network. If an itinerary is found, a window displays the details of the itinerary, including the route required, the number of stations the route passes through, the total distance traveled, and the estimated travel time. The travel time calculation uses an average in-vehicle speed of 80 km/h, a 6-minute transfer penalty, a 0.4-minute dwell penalty per intermediate station, and a walking speed of approximately 100 m/min (6 km/h) for access and egress legs. 
+The most important feature of the Transit Network Viewer is the Route Finder, which users can use to calculate the travel time between selected start and end locations. The route is determined using Dijkstra's algorithm, with a penalty incurred for every time a route requires a transfer. If the user selects start and end locations that are not at stations, walking time estimates are included for the parts of the itinerary both before and after the trip through the metro network. If an itinerary is found, a window displays the details of the itinerary, including the route required, the number of stations the route passes through, the total distance traveled, and the estimated travel time. The travel time calculation uses a modeled in-vehicle speed of 80 km/h, a 6-minute transfer penalty, a 0.4-minute dwell penalty per intermediate station, and a walking speed of approximately 100 m/min (6 km/h) for access and egress legs. 
 
 \section{Network Performance Analysis}
 
-I analyze the success of the networks quantitatively using several metrics. First, I determine the critical coverage percentage by calculating the proportion of critical transit points (high-density census blocks, critical services) that fall within the catchment area of any station in the network. The neighborhood coverage percentage is the fraction of neighborhood centroids within the catchment areas of at least one station. I also take the average distance from the nearest station across the entire metropolitan area and for the District of Columbia. The pipeline also produces estimated capital cost and daily ridership for each network via the ROW classification, cost, and ridership stages described above. Table \ref{tab:networkmetrics} provides the calculated coverage data for the three baseline generated networks (naive, iterative, genetic) and for the real-world WMATA network; the ACO output is evaluated in the extended metrics pipeline and is the default network in the deployed viewer.
+\subsection{Evaluation Methodology}
+I evaluate each network using two tiers of metrics: basic coverage/access and extended equity/efficiency. Basic coverage uses station catchments as 500 m buffers around station points in EPSG:3857. \textit{Point coverage} is the percent of high-need demand points in \texttt{complete\_points.geojson} that fall within any station catchment. \textit{Neighborhood coverage} applies the same rule to neighborhood centroids. \textit{Average distance} is estimated via Monte Carlo sampling: 1,000 random points are drawn inside the region polygon (and DC polygon separately), and the mean distance to the nearest station is computed using a cKDTree over station coordinates. \textit{Population-in-catchments} is estimated using a KDE fit to census block population (POP20): each block contributes jittered samples around its centroid proportional to population at a 0.5\% sampling rate (\texttt{n\_samples\_per\_person}=0.005), a Gaussian KDE is fit with 1,000 m bandwidth, and the KDE is integrated over a grid inside each station catchment. To keep runtime bounded, I use a 60 x 60 grid per station and cap evaluation to 800 points per station. This quantity is therefore a relative density mass, not an absolute population count, and is used only for comparing variants.
+
+Extended metrics are computed using census block centroids and POP20. \textit{Population Gini} splits each block's population equally across all stations within 500 m and computes the Gini coefficient across station totals. \textit{Population coverage at radii} computes the share of population whose nearest station is within 250 m, 500 m, and 1 km. \textit{High-need coverage} measures the share of top-quartile transit-potential blocks whose centroids are within 500 m of a station. \textit{Service efficiency} is population within 500 m per kilometer of service track; service track length is the sum of line segment lengths stored in each line GeoJSON, so interlined segments are counted multiple times. \textit{Transfer burden} builds a group-adjacency graph from line groupings, then samples up to 10,000 station pairs and BFSes the group graph to estimate minimum transfers, reporting the share of 0-transfer, 1-transfer, and 2+ transfer pairs.
 
 % --- Algorithm Network Figures ---
 \begin{figure}[ht]
@@ -502,29 +505,68 @@ I analyze the success of the networks quantitatively using several metrics. Firs
     \Description{A map visualizing the transit network generated by the naive (random walk) algorithm, with lines and stations highlighted.}
 \end{figure}
 
+\subsection{Evaluation Results}
+Table~\ref{tab:eval_basic} reports basic coverage and access metrics for all variants. Table~\ref{tab:eval_equity} summarizes equity and population coverage at multiple walk radii, and Table~\ref{tab:eval_efficiency} reports service efficiency and transfer burden. For context, the real WMATA system is approximately 129 route miles (208 km) with 98 stations~\cite{lit:wmata_wikipedia}. The \textit{track\_km} column below is a service-track measure derived from line-segment lengths (interlined segments counted multiple times) and is therefore not directly comparable to route miles, but it provides a consistent internal length basis across all generated networks and WMATA.
+
 \begin{table*}[h]
-\caption{Comparison of Network Designs on Key Metrics}
-\label{tab:networkmetrics}
+\caption{Basic Coverage and Access Metrics}
+\label{tab:eval_basic}
 \resizebox{\textwidth}{!}{
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccc}
 \toprule
-\textbf{Network} & \textbf{\% Critical Coverage} & \textbf{\% Neighborhood Coverage} & \textbf{Avg. dist, regional} & \textbf{Avg. dist, DC} \\
+\textbf{Network} & \textbf{pt\_cov\%} & \textbf{neigh\_cov\%} & \textbf{avg\_dist\_region\_m} & \textbf{avg\_dist\_dc\_m} & \textbf{pop\_in\_catchments} \\
 \midrule
-Genetic & 17.47 & 6.61 & 11.03 & 0.92 \\
-Iterative & 24.12 & 4.96 & 11.19 & 1.67 \\
-Naive & 18.95 & 3.99 & 10.86 & 1.59 \\
-\midrule
-Real-world & 13.39 & 3.03 & 14.94 & 1.59 \\
+Naive & 12.92 & 4.41 & 10010 & 1761 & 0.0189 \\
+Iterative & 18.57 & 7.99 & 18009 & 914 & 0.0279 \\
+ACO & 32.71 & 12.26 & 9720 & 895 & 0.0528 \\
+Genetic & 22.87 & 8.95 & 8848 & 845 & 0.0348 \\
+WMATA & 10.37 & 3.03 & 15374 & 1611 & 0.0110 \\
 \bottomrule
 \end{tabular}
 }
 \end{table*}
 
-By the metrics established in this table, the networks produced by all three algorithms outperform the real-world network. They exhibit higher critical coverage and neighborhood coverage rates, and provide lower average distances across the region. Each algorithm performs most strongly in a different metric: the genetic algorithm performs most strongly in neighborhood coverage and average distance within DC, while the naive algorithm shows the lowest average distance across the entire region, and the iterative improvement algorithm shows the highest critical coverage. 
+\begin{table*}[h]
+\caption{Equity and Population Coverage}
+\label{tab:eval_equity}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Network} & \textbf{pop\_gini} & \textbf{cov\_250m\%} & \textbf{cov\_500m\%} & \textbf{cov\_1km\%} & \textbf{high\_need\_cov\%} \\
+\midrule
+Naive & 0.508 & 2.1 & 7.6 & 23.6 & 10.3 \\
+Iterative & 0.469 & 3.1 & 11.1 & 26.0 & 18.5 \\
+ACO & 0.494 & 5.5 & 20.4 & 49.4 & 30.2 \\
+Genetic & 0.501 & 3.5 & 13.2 & 36.8 & 20.3 \\
+WMATA & 0.546 & 1.1 & 4.7 & 14.8 & 6.9 \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
 
-To comprehensively reflect project updates, the evaluation workflow now includes an \texttt{evaluate\_extended} stage with additional equity and operations metrics: station-level population Gini, population coverage at 250\,m/500\,m/1\,km, high-need block coverage (top quartile of transit potential), service efficiency (population served per km of service track), and transfer burden (share of OD pairs requiring 0, 1, or 2+ transfers). These metrics provide a stronger basis for comparing ACO and the baseline algorithms under a common framework.
+\begin{table*}[h]
+\caption{Service Efficiency and Transfer Burden}
+\label{tab:eval_efficiency}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Network} & \textbf{track\_km} & \textbf{pop\_per\_km} & \textbf{mean\_xfers} & \textbf{0xfer\%} & \textbf{1xfer\%} & \textbf{2+xfers\%} \\
+\midrule
+Naive & 1486.5 & 0.22 & 1.04 & 14.3 & 67.6 & 18.1 \\
+Iterative & 1543.1 & 0.31 & 0.56 & 43.5 & 56.5 & 0.0 \\
+ACO & 1783.6 & 0.49 & 1.68 & 11.6 & 36.5 & 51.9 \\
+Genetic & 12388.6 & 0.05 & 0.97 & 14.1 & 74.6 & 11.3 \\
+WMATA & 344.1 & 0.59 & \textit{N/A} & \textit{N/A} & \textit{N/A} & \textit{N/A} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
 
-I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
+Several patterns are consistent across the metrics. ACO produces the highest coverage at all walk radii and the strongest high-need coverage, but it also carries the highest transfer burden and a long service-track footprint. The iterative network yields the lowest transfer burden and a comparatively strong balance of equity and coverage, while the naive network is modest on both coverage and efficiency. The genetic network achieves good spatial coverage but does so with an extremely long service-track length, driving its efficiency score down by an order of magnitude relative to other variants. WMATA scores lower on walk-radius coverage, which is expected for a real network designed with feeder buses, park-and-ride, and interlined service rather than uniform 500 m walk access; however, it remains the most efficient per kilometer of service track, consistent with its cost-constrained, operationally mature design.
+
+These tables show that algorithmic networks can be tuned to maximize coverage, but real-world feasibility requires balancing coverage with transfer burden and track length. The ACO variant is the most ambitious in spatial reach, while the iterative variant is the most operationally coherent under the transfer metric. Given WMATA's real-world system length and station count~\cite{lit:wmata_wikipedia}, the generated networks should be interpreted as aggressive build-out scenarios rather than direct replacements at current capital scale.
+
+I also perform some potential use-case evaluation by identifying location pairs and calculating the transit time in each network. I calculate the transit times for my network using my Route Planner tool, and I calculate transit times for the real-world network using the WMATA transit planner application. In this report I compare the results obtained for three sample itineraries chosen to demonstrate a variety of transit uses and to address the shortcomings of the existing WMATA network that I raised in the introduction. The three routes presented in this paper are: College Park to DCA Airport (suburb to important hub), downtown Bethesda to Reston Center (suburb to suburb), and Congress Heights to downtown Silver Spring (disadvantaged neighborhood to suburb). For all three routes, the algorithms developed in this project provide faster transit times than the real-world network, with each algorithm having stronger performance on different routes. The ACO variant is not included in Table~\ref{tab:transittimes} because its route-planner runs were not recorded for this set of examples. Table \ref{tab:transittimes} shows the travel times calculated for each network. 
 
 % --- Table: Sample Transit Times ---
 \begin{table*}[h]
@@ -545,11 +587,13 @@ Real-world & 43 min & 1 hr 7 min & 41 min \\
 }
 \end{table*}
 
-Visual comparison of the three obtained networks can provide additional justification and insight. The network has strong suburb-to-suburb connection, and also has a few strong connections in the urban core, but there are some large underserved areas. This is likely because the search space is simply too large to ensure that random walks will construct a network that covers it sufficiently. This likely explains its low performance in neighborhood coverage and average station distance within DC.
+Visual comparison of the generated networks provides additional justification and insight. The naive network shows some suburb-to-suburb connectivity, but it leaves large underserved areas, consistent with its lower point and neighborhood coverage metrics.
 
-The iterative improvement algorithm takes the most time to execute, but provides a much more robust and connective network, especially in the urban core. The network has strong connections between suburbs and the urban core, but suburb-to-suburb connections are more limited. This is likely because the reward mechanism simply rewards routes with higher score sums for all stations across the line, so routes that gain a high increase in score due to being very long and travelling through DC are selected for. This likely explains its high critical coverage rate.
+The iterative improvement algorithm takes the most time to execute, but produces a more coherent network with strong urban-core connectivity and the lowest transfer burden. Its coverage is moderate, suggesting that the objective function favors cohesive corridors over maximal spatial reach.
 
-The genetic algorithm is the most sophisticated, and its output reflects this. There are strong connections between the urban core and suburbs in all directions, and coverage within the District of Columbia is strong as well. This is likely because of the service pattern reward weight, rewarding for routes that serve the urban core with connections to suburban areas. The high neighborhood coverage rate and low average distance within DC are likely due to this.
+The ACO network is the most expansive spatially, with the strongest coverage and high-need access. That coverage comes at the cost of a long service-track length and a high share of 2+ transfer pairs, indicating a network that is ambitious in reach but operationally complex.
+
+The genetic algorithm produces strong core-to-suburb connections and comparatively high neighborhood coverage, but its service-track length is extreme, which drives down efficiency. This likely reflects the service-pattern reward weight, which favors extensive reach at the expense of construction realism.
 
 \subsection{Limitations}
 The quality of the networks generated using my pipeline are only as good as the data they are created from. As discussed earlier, the data portals for each of the states varied wildly with respect to data depth and breadth. Virginia, in particular, did not have nearly as much data containing locations of areas supported by transit. Maryland and Washington, D.C. both had much more comprehensive data resources, which is expected given that Washington, D.C. is a single municipal jurisdiction and Maryland is a relatively small state mostly centered around a single metropolitan area. Virginia, on the other hand, is a large state with many metropolitan areas, and the data reflected this. There were often data of the sort I was interested in, but only for one or two counties and outside the DC area. 
