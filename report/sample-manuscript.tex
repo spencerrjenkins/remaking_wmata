@@ -78,9 +78,10 @@ Loudoun County & 420,959 & 334 & 51107 \\
 
 % --- Table: Data Sources ---
 
-\begin{table}[h]
+\begin{table*}[h]
 \caption{Key Data Sources Used in the Study}
 \label{tab:datasources}
+\resizebox{\textwidth}{!}{
 \begin{tabular}{ll}
 \toprule
 Source & Description \\
@@ -96,7 +97,8 @@ US Census Bureau LEHD~\cite{lodes2023} & Block-level employment OD flows (LODES8
 OpenStreetMap via OSMnx~\cite{boeing2017osmnx} & Road and rail geometry for ROW classification \\
 \bottomrule
 \end{tabular}
-\end{table}
+}
+\end{table*}
 
 \section{Literature Review}
 
@@ -106,7 +108,7 @@ Efficient representation and querying of spatial data is foundational for transi
 
 A variety of algorithmic approaches have been proposed for generating and optimizing transit networks. Bast et al.~\cite{bast2016route} provide a comprehensive overview of route planning algorithms in transportation networks, including shortest-path, greedy, and metaheuristic methods. Greedy algorithms, as surveyed by Davis and Impagliazzo~\cite{davis2007greedy}, offer computational efficiency for a range of graph problems, though they may yield suboptimal solutions for complex network design tasks. Genetic algorithms (GAs) have been shown to be effective for transit route planning, as demonstrated by Chien et al.~\cite{chien2001genetic} and Dib et al.~\cite{bib:dib2017ga}, who apply GAs to optimize bus and public transit networks under multiple criteria. This study adapts these approaches to rapid transit and also introduces a MAX-MIN Ant System~\cite{stutzle2000mmas} formulation for the Transit Network Design Problem, following Nikolić and Teodorović~\cite{nikolic2013aco}.
 
-Graph neural network approaches have recently been applied to transportation demand modeling. Hamilton et al.~\cite{hamilton2017graphsage} introduce GraphSAGE, an inductive representation learning framework that propagates neighborhood features through mean aggregation. Veličković et al.~\cite{velickovic2018gat} extend this with attention-weighted aggregation (Graph Attention Networks), enabling nodes to selectively weight neighbors by demand-signal relevance. This study applies a numpy-only GraphSAGE approximation to re-score graph nodes beyond KDE density, incorporating multi-hop demand propagation. Employment origin-destination data from the U.S. Census LEHD LODES program~\cite{lodes2023} is used to build commute-pattern-aware demand surfaces that supplement the population-based signal.
+Graph neural network approaches have recently been applied to transportation demand modeling. Hamilton et al.~\cite{hamilton2017graphsage} introduce GraphSAGE, an inductive representation learning framework that propagates neighborhood features through mean aggregation. Veličković et al.~\cite{velickovic2018gat} extend this with attention-weighted aggregation (Graph Attention Networks), enabling nodes to selectively weight neighbors by demand-signal relevance. This study applies a numpy-only multi-hop neighborhood aggregation scheme following the GraphSAGE mean-aggregator formulation to re-score graph nodes beyond KDE density; no weight matrices are trained, so the aggregation propagates existing demand signals rather than learning new representations. Employment origin-destination data from the U.S. Census LEHD LODES program~\cite{lodes2023} is used to build commute-pattern-aware demand surfaces that supplement the population-based signal.
 
 Construction cost estimation draws on FTA National Transit Database benchmarks~\cite{fta2023ntd} and Halcrow Fox per-km multipliers~\cite{halcrow2000cost}, with a contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of 258 infrastructure projects, which documents a systematic 44.7\% average rail overrun. Right-of-way classification uses OSMnx~\cite{boeing2017osmnx}, following a simplified map-matching strategy in the spirit of Newson and Krumm~\cite{newson2009mapmatching}. Ridership estimation uses Wilson's~\cite{wilson1971gravity} doubly-constrained gravity model, whose calibration is informed by observed ridership patterns in prior gravity-model studies such as Zhao et al.~\cite{zhao2022ridership}.
 
@@ -366,7 +368,7 @@ Genetic: diversity incentive weight & Incentive for diversity in population & -1
 \end{table*}
 
 \subsection{Pipeline Orchestration and Reproducibility}
-The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}) spanning 14 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
+The implementation now uses a cached, stage-based pipeline (\texttt{pipeline.py}) spanning 15 stages from regional data assembly through evaluation. Stages can be run selectively or forced for re-computation, allowing expensive steps (e.g., graph construction or optimization) to be reused while rerunning only downstream analyses.
 
 \begin{table*}[h]
 \caption{Pipeline Stages and Primary Outputs}
@@ -406,7 +408,7 @@ Each generated line is classified by right-of-way (ROW) type using OSMnx~\cite{b
 
 \subsection{Construction Cost Estimation}
 
-Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), subway surface (\$80M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$30M surface, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. Shared segments between overlapping lines receive a 50\% cost discount. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
+Per-km capital cost is estimated by ROW type using rates calibrated against the FTA National Transit Database~\cite{fta2023ntd} and Halcrow Fox benchmarks~\cite{halcrow2000cost}: subway tunnel (\$750M/km), subway surface (\$80M/km), elevated (\$200M/km), existing rail (\$25M/km), and street-level (\$100M/km). Station costs are added separately (\$200M underground, \$60M elevated, \$30M surface, \$15M existing rail, \$20M at-grade). All costs include a 40\% contingency factor motivated by Flyvbjerg et al.'s~\cite{flyvbjerg2003overruns} meta-analysis of rail infrastructure overruns, which found a systematic average overrun of 44.7\% across 258 projects. Shared segments between overlapping lines receive a 50\% cost discount. Total and per-line costs are stored in the output GeoJSON and displayed in the Transit Network Viewer.
 
 \begin{table}[h]
 \caption{ROW Cost Parameters Used for Capital Estimates}
