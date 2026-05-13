@@ -145,14 +145,10 @@ def _build_one_route(
                         valid_neighbors.append(n)
                         neighbor_deviations[n] = dev
             
-            # If constraints eliminate all neighbors, fallback to all candidates
+            # If no neighbor satisfies the angle/direction constraints, stop.
+            # Falling back to unconstrained candidates would violate the path rule.
             if not valid_neighbors:
-                valid_neighbors = candidates
-                for n in candidates:
-                    v2 = (positions[n][0] - positions[u][0], 
-                          positions[n][1] - positions[u][1])
-                    dev = deviation_between(v1, v2)
-                    neighbor_deviations[n] = dev
+                break
         else:
             # First step: no angle constraint, all candidates valid
             valid_neighbors = candidates

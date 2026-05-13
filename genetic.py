@@ -437,7 +437,7 @@ if __name__ == "__main__":
         kde,
         num_routes=20,
         population_size=100,
-        generations=30,
+        generations=1,
         min_distance=45000,
         max_distance=80000,
         radius=500,

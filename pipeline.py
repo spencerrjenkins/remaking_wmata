@@ -69,6 +69,7 @@ from core.spatial import (
     compute_transit_potential,
     filter_points_in_polygons,
 )
+from geo_constraints import build_fixed_no_go_zones
 from core.stations import (
     assign_station_neighborhoods,
     mark_station_nodes,
@@ -687,6 +688,11 @@ def stage_aco(
         kde_radius=cfg.kde_radius,
         demand_gdf=demand_gdf,
         demand_weight=0.4,
+        forbidden_polygons=build_fixed_no_go_zones(),
+        min_angle=130.0,
+        total_turn_high=80.0,
+        total_turn_reset=30.0,
+        max_count=3,
     )
 
     if not best_routes:
