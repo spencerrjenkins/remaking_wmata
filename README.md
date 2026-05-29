@@ -472,3 +472,4 @@ Run `python pipeline.py --stages evaluate` for the full metrics table.
 18. Newson, P., & Krumm, J. (2009). Hidden Markov map matching through noise and sparseness. *SIGSPATIAL*, 336–343.
 19. Wilson, A. G. (1971). A family of spatial interaction models, and associated developments. *Environment and Planning A*, 3(1), 1–32.
 20. U.S. Census Bureau, LEHD Program. (2023). *LEHD Origin-Destination Employment Statistics (LODES) Technical Documentation*.
+21. Subway data. *Simple Maps*. <https://simplemaps.com/data/business/subway>

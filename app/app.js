@@ -217,21 +217,34 @@ function summarizeRouteOperations(lineSequence) {
     `;
 }
 
-// Load network (graph) - draw first, under lines
-fetchGeoJSON('../data/output/network.geojson').then(data => {
-    const networkLayer = L.geoJSON(data, {
-        style: feature => {
-            if (feature.geometry.type === 'LineString') {
-                return { color: '#222', weight: 1, opacity: 0.5, dashArray: '4 4' };
-            }
-            return {};
-        },
-        pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 2, color: '#222', fillOpacity: 0.5 })
+// Dataset mode: 'output' for normal network, 'output_subway' for Subway restaurants
+let datasetMode = 'output';
+
+function loadNetworkGeoJSON(outputDir) {
+    if (layers['Network']) {
+        if (map.hasLayer(layers['Network'])) map.removeLayer(layers['Network']);
+        delete layers['Network'];
+        const idx = layerOrder.indexOf('Network');
+        if (idx !== -1) layerOrder.splice(idx, 1);
+    }
+    fetchGeoJSON(`../data/${outputDir}/network.geojson`).then(data => {
+        const networkLayer = L.geoJSON(data, {
+            style: feature => {
+                if (feature.geometry.type === 'LineString') {
+                    return { color: '#222', weight: 1, opacity: 0.5, dashArray: '4 4' };
+                }
+                return {};
+            },
+            pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 2, color: '#222', fillOpacity: 0.5 })
+        });
+        layers['Network'] = networkLayer;
+        // Do not add to map by default
+        layerOrder.push('Network');
     });
-    layers['Network'] = networkLayer;
-    // Do not add to map by default
-    layerOrder.push('Network');
-});
+}
+
+// Load network on page load
+loadNetworkGeoJSON(datasetMode);
 
 // Add support for toggling
 let currentLinesSource = 'lines_genetic';
@@ -286,7 +299,7 @@ function loadLinesGeoJSON(source) {
     currentLinesLayerNames.length = 0;
     // Load the selected lines file
     // Load lines and add tooltips, vertex markers, and circles
-    fetchGeoJSON(`../data/output/${source}.geojson`).then(data => {
+    fetchGeoJSON(`../data/${datasetMode}/${source}.geojson`).then(data => {
         // First, build a map of vertex => [line_ids], and vertex => kde
         (data.features || []).forEach((feature, i) => {
             const coords = feature.geometry.coordinates;
@@ -502,6 +515,22 @@ function loadLinesGeoJSON(source) {
         }
     });
 }
+
+// Dataset selector: switch between normal network and Subway restaurants network
+const datasetSelect = document.createElement('select');
+datasetSelect.id = 'dataset-select';
+[['output', 'Normal Network'], ['output_subway', 'Subway Restaurants']].forEach(([val, label]) => {
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = label;
+    datasetSelect.appendChild(opt);
+});
+datasetSelect.onchange = function () {
+    datasetMode = this.value;
+    loadNetworkGeoJSON(datasetMode);
+    loadLinesGeoJSON(currentLinesSource);
+};
+document.getElementById('controls').appendChild(datasetSelect);
 
 // Add UI for toggling
 const linesSourceSelect = document.createElement('select');

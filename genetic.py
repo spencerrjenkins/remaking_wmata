@@ -423,14 +423,30 @@ def crossover(parent1, parent2, graph=None, positions=None, min_distance=20000, 
 
 # --- Add a main function for standalone execution ---
 if __name__ == "__main__":
-    with open("pickle/graph.pkl", "rb") as f:
+    import argparse
+    import numpy as np
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="Run genetic algorithm for transit network generation.")
+    parser.add_argument(
+        "--pickle-dir",
+        default="pickle",
+        help="Directory to read graph/positions/kde from and write results to (default: pickle).",
+    )
+    cli_args = parser.parse_args()
+
+    pickle_dir = Path(cli_args.pickle_dir)
+
+    with open(pickle_dir / "graph.pkl", "rb") as f:
         graph = pickle.load(f)
-    with open("pickle/positions.pkl", "rb") as f:
+    with open(pickle_dir / "positions.pkl", "rb") as f:
         positions = pickle.load(f)
-    with open("pickle/kde.pkl", "rb") as f:
+    with open(pickle_dir / "kde.pkl", "rb") as f:
         kde = pickle.load(f)
-    with open("pickle/ex_map_dc.pkl", "rb") as f:
-        ex_map = pickle.load(f)
+
+    ex_map_path = Path("data/ex_map_dc.npy")
+    ex_map = np.load(str(ex_map_path)) if ex_map_path.exists() else None
+
     best_routes, best_score, log = genetic_algorithm(
         graph,
         positions,
@@ -445,9 +461,9 @@ if __name__ == "__main__":
         core_bounds=ex_map,
     )
     print("Done!")
-    with open("pickle/best_routes.pkl", "wb") as f:
+    with open(pickle_dir / "best_routes.pkl", "wb") as f:
         pickle.dump(best_routes, f)
-    with open("pickle/best_score.pkl", "wb") as f:
+    with open(pickle_dir / "best_score.pkl", "wb") as f:
         pickle.dump(best_score, f)
-    with open("pickle/log.pkl", "wb") as f:
+    with open(pickle_dir / "log.pkl", "wb") as f:
         pickle.dump(log, f)

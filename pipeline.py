@@ -160,6 +160,11 @@ class PipelineConfig:
     eval_kde_n_samples_per_person: float = 0.005
     eval_grid_resolution: int = 60
     eval_max_points_per_station: Optional[int] = 800
+    output_dir: Path = field(default_factory=lambda: OUTPUT_DIR)
+    pickle_dir: Path = field(default_factory=lambda: PICKLE_DIR)
+    points_file: Path = field(default_factory=lambda: DATA_DIR / "complete_points.geojson")
+    contract_graph: bool = True
+    graph_type: str = "gabriel"
 
 
 # ---------------------------------------------------------------------------
@@ -213,21 +218,23 @@ def _load_shapefile_required(path: str) -> gpd.GeoDataFrame:
     return gdf
 
 
-def _load_network_pickles():
+def _load_network_pickles(pickle_dir: Path = None):
     """Load gabriel_contracted, new_positions, kde from pickle/."""
-    with open(PICKLE_DIR / "graph.pkl", "rb") as f:
+    _dir = pickle_dir if pickle_dir is not None else PICKLE_DIR
+    with open(_dir / "graph.pkl", "rb") as f:
         graph = pickle.load(f)
-    with open(PICKLE_DIR / "positions.pkl", "rb") as f:
+    with open(_dir / "positions.pkl", "rb") as f:
         positions = pickle.load(f)
-    with open(PICKLE_DIR / "kde.pkl", "rb") as f:
+    with open(_dir / "kde.pkl", "rb") as f:
         kde = pickle.load(f)
     return graph, positions, kde
 
 
-def _kde_cache_path(bandwidth: float, n_samples_per_person: float) -> Path:
+def _kde_cache_path(bandwidth: float, n_samples_per_person: float, pickle_dir: Path = None) -> Path:
+    _dir = pickle_dir if pickle_dir is not None else PICKLE_DIR
     n_tag = f"{n_samples_per_person:.4f}".replace(".", "p")
     bw_tag = f"{bandwidth:.0f}"
-    return PICKLE_DIR / f"pop_kde_bw{bw_tag}_n{n_tag}.pkl"
+    return _dir / f"pop_kde_bw{bw_tag}_n{n_tag}.pkl"
 
 
 def _load_population_kde_cache(
@@ -263,7 +270,7 @@ def _save_population_kde_cache(
     n_samples_per_person: float,
     kde: object,
 ) -> None:
-    PICKLE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "blocks_mtime": blocks_path.stat().st_mtime,
         "bandwidth": bandwidth,
@@ -417,20 +424,52 @@ def stage_graph_points(cfg: PipelineConfig, force: bool = False) -> None:
     log.info("graph_points: %d total points → %s", len(df_points), out)
 
 
+def stage_subway_graph_points(
+    cfg: PipelineConfig,
+    county_shapes: gpd.GeoDataFrame,
+    force: bool = False,
+) -> None:
+    """Load Subway restaurant locations, filter to study area counties, save as graph seed points."""
+    out = cfg.points_file
+    if out.exists() and not force:
+        log.info("subway_graph_points: cached → %s", out)
+        return
+
+    subway_csv = DATA_DIR / "subway.csv"
+    log.info("subway_graph_points: loading %s …", subway_csv)
+    df = pd.read_csv(str(subway_csv))
+
+    geometry = [Point(lng, lat) for lat, lng in zip(df["lat"], df["lng"])]
+    gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+
+    log.info("subway_graph_points: filtering to study area (%d total locations) …", len(gdf))
+    gdf_filtered = filter_points_in_polygons(gdf, county_shapes.geometry)
+    log.info("subway_graph_points: %d locations remain after county filter", len(gdf_filtered))
+
+    df_points = gpd.GeoDataFrame(
+        geometry=gdf_filtered.to_crs(epsg=3857).geometry,
+        crs="EPSG:3857",
+    ).drop_duplicates().reset_index(drop=True)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    save_geojson(df_points, str(out))
+    log.info("subway_graph_points: %d Subway locations → %s", len(df_points), out)
+
+
 def stage_network(cfg: PipelineConfig, county_shapes: gpd.GeoDataFrame, force: bool = False) -> None:
     """Build Gabriel graph, contract via Louvain, fit KDE, assign scores, pickle.
 
     Nodes are constrained to the provided `county_shapes` to ensure the
     generated network only contains points inside the study counties.
     """
-    network_out = OUTPUT_DIR / "network.geojson"
-    graph_pkl = PICKLE_DIR / "graph.pkl"
+    network_out = cfg.output_dir / "network.geojson"
+    graph_pkl = cfg.pickle_dir / "graph.pkl"
     if network_out.exists() and graph_pkl.exists() and not force:
-        log.info("network: cached → %s", PICKLE_DIR)
+        log.info("network: cached → %s", cfg.pickle_dir)
         return
 
-    log.info("network: loading %s …", DATA_DIR / "complete_points.geojson")
-    df_points = load_geojson(str(DATA_DIR / "complete_points.geojson"))
+    log.info("network: loading %s …", cfg.points_file)
+    df_points = load_geojson(str(cfg.points_file))
     # Ensure points are in a projected CRS for spatial filtering
     if df_points.crs is None or df_points.crs.to_epsg() != 3857:
         df_points = df_points.to_crs(epsg=3857)
@@ -441,17 +480,26 @@ def stage_network(cfg: PipelineConfig, county_shapes: gpd.GeoDataFrame, force: b
     log.info("network: %d points after county filter", len(df_points))
     pts_array = np.array(list(zip(df_points.geometry.x, df_points.geometry.y)))
 
-    log.info("network: building Gabriel graph (%d points) …", len(df_points))
-    gabriel = weights.Gabriel.from_dataframe(df_points, use_index=True, silence_warnings=True)
-    network = gabriel.to_networkx()
+    if cfg.graph_type == "delaunay":
+        log.info("network: building Delaunay triangulation (%d points) …", len(df_points))
+        proximity_w = weights.Delaunay.from_dataframe(df_points, use_index=True, silence_warnings=True)
+    else:
+        log.info("network: building Gabriel graph (%d points) …", len(df_points))
+        proximity_w = weights.Gabriel.from_dataframe(df_points, use_index=True, silence_warnings=True)
+    network = proximity_w.to_networkx()
 
-    log.info(
-        "network: contracting Louvain communities (resolution=%.3f) …",
-        cfg.louvain_resolution,
-    )
-    gabriel_contracted, new_positions = contract_louvain_communities_with_positions(
-        network, {n: pts_array[n] for n in network.nodes()}, cfg.louvain_resolution
-    )
+    if cfg.contract_graph:
+        log.info(
+            "network: contracting Louvain communities (resolution=%.3f) …",
+            cfg.louvain_resolution,
+        )
+        gabriel_contracted, new_positions = contract_louvain_communities_with_positions(
+            network, {n: pts_array[n] for n in network.nodes()}, cfg.louvain_resolution
+        )
+    else:
+        log.info("network: skipping Louvain contraction — using literal point locations as nodes")
+        gabriel_contracted = network
+        new_positions = {n: pts_array[n] for n in network.nodes()}
     gabriel_contracted, new_positions = remove_isolated_nodes(gabriel_contracted, new_positions)
 
     log.info("network: fitting KDE …")
@@ -461,22 +509,22 @@ def stage_network(cfg: PipelineConfig, county_shapes: gpd.GeoDataFrame, force: b
     assign_edge_weights(gabriel_contracted, new_positions)
     assign_node_scores(gabriel_contracted, new_positions, kde, cfg.kde_radius)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
     save_graph_to_geojson(gabriel_contracted, new_positions, str(network_out))
 
-    PICKLE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(PICKLE_DIR / "kde.pkl", "wb") as f:
+    cfg.pickle_dir.mkdir(parents=True, exist_ok=True)
+    with open(cfg.pickle_dir / "kde.pkl", "wb") as f:
         pickle.dump(kde, f)
-    with open(PICKLE_DIR / "graph.pkl", "wb") as f:
+    with open(cfg.pickle_dir / "graph.pkl", "wb") as f:
         pickle.dump(gabriel_contracted, f)
-    with open(PICKLE_DIR / "positions.pkl", "wb") as f:
+    with open(cfg.pickle_dir / "positions.pkl", "wb") as f:
         pickle.dump(new_positions, f)
 
     log.info(
         "network: done — %d nodes, %d edges → %s",
         gabriel_contracted.number_of_nodes(),
         gabriel_contracted.number_of_edges(),
-        PICKLE_DIR,
+        cfg.pickle_dir,
     )
 
 
@@ -486,12 +534,12 @@ def stage_naive(
     force: bool = False,
 ) -> None:
     """Generate transit routes via angle-constrained random walks (no iterative improvement)."""
-    out = OUTPUT_DIR / "lines_naive.geojson"
+    out = cfg.output_dir / "lines_naive.geojson"
     if out.exists() and not force:
         log.info("naive: cached → %s", out)
         return
 
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
     log.info("naive: performing %d walks …", cfg.num_walks)
     lines, _, _ = perform_walks(
@@ -520,12 +568,12 @@ def stage_iterative(
     force: bool = False,
 ) -> None:
     """Generate routes with iterative replacement of lowest-scoring walks."""
-    out = OUTPUT_DIR / "lines_iterative.geojson"
+    out = cfg.output_dir / "lines_iterative.geojson"
     if out.exists() and not force:
         log.info("iterative: cached → %s", out)
         return
 
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
     log.info("iterative: initial %d walks …", cfg.num_walks)
     lines, traversed_edges, complete_traversed_edges = perform_walks(
@@ -566,12 +614,12 @@ def stage_genetic(
     force: bool = False,
 ) -> None:
     """Post-process genetic.py output into a viewable GeoJSON line file."""
-    out = OUTPUT_DIR / "lines_genetic.geojson"
+    out = cfg.output_dir / "lines_genetic.geojson"
     if out.exists() and not force:
         log.info("genetic: cached → %s", out)
         return
 
-    best_routes_pkl = PICKLE_DIR / "best_routes.pkl"
+    best_routes_pkl = cfg.pickle_dir / "best_routes.pkl"
     if not best_routes_pkl.exists():
         log.warning(
             "genetic: %s not found — run genetic.py first, then re-run this stage",
@@ -579,7 +627,7 @@ def stage_genetic(
         )
         return
 
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
     with open(best_routes_pkl, "rb") as f:
         best_routes = pickle.load(f)
@@ -597,8 +645,8 @@ def stage_genetic(
 
 def stage_gnn_scoring(cfg: PipelineConfig, force: bool = False) -> None:
     """Re-score graph nodes with GNN-style multi-hop embeddings, overwriting 'score' attributes."""
-    graph_pkl = PICKLE_DIR / "graph.pkl"
-    gnn_pkl = PICKLE_DIR / "gnn_scores.pkl"
+    graph_pkl = cfg.pickle_dir / "graph.pkl"
+    gnn_pkl = cfg.pickle_dir / "gnn_scores.pkl"
     if gnn_pkl.exists() and not force:
         log.info("gnn_scoring: cached → %s", gnn_pkl)
         return
@@ -607,13 +655,13 @@ def stage_gnn_scoring(cfg: PipelineConfig, force: bool = False) -> None:
         log.warning("gnn_scoring: graph.pkl not found — run 'network' stage first")
         return
 
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
     log.info("gnn_scoring: computing GNN embeddings for %d nodes …", len(positions))
     scores = assign_gnn_node_scores(graph, positions, kde, num_layers=2)
 
     with open(gnn_pkl, "wb") as f:
         pickle.dump(scores, f)
-    with open(PICKLE_DIR / "graph.pkl", "wb") as f:
+    with open(cfg.pickle_dir / "graph.pkl", "wb") as f:
         pickle.dump(graph, f)
 
     log.info("gnn_scoring: %d node scores updated → %s", len(scores), gnn_pkl)
@@ -659,12 +707,12 @@ def stage_aco(
     force: bool = False,
 ) -> None:
     """Generate transit routes via Ant Colony Optimisation (ACO)."""
-    out = OUTPUT_DIR / "lines_aco.geojson"
+    out = cfg.output_dir / "lines_aco.geojson"
     if out.exists() and not force:
         log.info("aco: cached → %s", out)
         return
 
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
     demand_gdf = None
     lodes_path = DATA_DIR / "demand_lodes.geojson"
@@ -707,7 +755,7 @@ def stage_aco(
     )
     names = assign_station_neighborhoods(positions, status, neighborhoods)
 
-    with open(PICKLE_DIR / "best_routes_aco.pkl", "wb") as f:
+    with open(cfg.pickle_dir / "best_routes_aco.pkl", "wb") as f:
         pickle.dump(best_routes, f)
 
     save_lines_to_geojson(best_routes, graph, positions, kde, str(out), status, groups, names)
@@ -717,7 +765,7 @@ def stage_aco(
 
 def stage_row_snap(cfg: PipelineConfig, force: bool = False) -> None:
     """Classify ROW type for each segment in all generated line files."""
-    row_pkl = PICKLE_DIR / "row_snap.pkl"
+    row_pkl = cfg.pickle_dir / "row_snap.pkl"
     if row_pkl.exists() and not force:
         log.info("row_snap: cached → %s", row_pkl)
         return
@@ -733,7 +781,7 @@ def stage_row_snap(cfg: PipelineConfig, force: bool = False) -> None:
         force=force,
     )
 
-    with open(row_pkl, "wb") as f:
+    with open(cfg.pickle_dir / "row_snap.pkl", "wb") as f:
         pickle.dump(osm_network, f)
 
     log.info("row_snap: OSM network ready (%s edges)", len(osm_network.get("edges", [])) if osm_network else 0)
@@ -741,9 +789,9 @@ def stage_row_snap(cfg: PipelineConfig, force: bool = False) -> None:
 
 def stage_cost(cfg: PipelineConfig, force: bool = False) -> None:
     """Estimate and attach construction costs to all generated line GeoJSONs."""
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
-    row_pkl = PICKLE_DIR / "row_snap.pkl"
+    row_pkl = cfg.pickle_dir / "row_snap.pkl"
     osm_network = None
     if row_pkl.exists():
         with open(row_pkl, "rb") as f:
@@ -777,10 +825,10 @@ def stage_cost(cfg: PipelineConfig, force: bool = False) -> None:
         log.info("cost: %s annotated → %s", variant, dst_path)
 
     _cost_variants = [
-        ("naive",     OUTPUT_DIR / "lines_naive.geojson",     OUTPUT_DIR / "lines_naive.geojson"),
-        ("iterative", OUTPUT_DIR / "lines_iterative.geojson", OUTPUT_DIR / "lines_iterative.geojson"),
-        ("aco",       OUTPUT_DIR / "lines_aco.geojson",       OUTPUT_DIR / "lines_aco.geojson"),
-        ("genetic",   OUTPUT_DIR / "lines_genetic.geojson",   OUTPUT_DIR / "lines_genetic.geojson"),
+        ("naive",     cfg.output_dir / "lines_naive.geojson",     cfg.output_dir / "lines_naive.geojson"),
+        ("iterative", cfg.output_dir / "lines_iterative.geojson", cfg.output_dir / "lines_iterative.geojson"),
+        ("aco",       cfg.output_dir / "lines_aco.geojson",       cfg.output_dir / "lines_aco.geojson"),
+        ("genetic",   cfg.output_dir / "lines_genetic.geojson",   cfg.output_dir / "lines_genetic.geojson"),
     ]
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _p:
         _futs = [_p.submit(_annotate_cost, *v) for v in _cost_variants]
@@ -810,7 +858,7 @@ def _geojson_has_cost(path: Path) -> bool:
 def stage_ridership(cfg: PipelineConfig, force: bool = False) -> None:
     """Estimate and attach ridership to all generated line GeoJSONs."""
     import json as _json
-    graph, positions, kde = _load_network_pickles()
+    graph, positions, kde = _load_network_pickles(cfg.pickle_dir)
 
     demand_gdf = None
     lodes_path = DATA_DIR / "demand_lodes.geojson"
@@ -855,10 +903,10 @@ def stage_ridership(cfg: PipelineConfig, force: bool = False) -> None:
         log.info("ridership: %s annotated (total=%.0f/day)", variant, sum(ridership))
 
     _ridership_variants = [
-        ("naive",     OUTPUT_DIR / "lines_naive.geojson"),
-        ("iterative", OUTPUT_DIR / "lines_iterative.geojson"),
-        ("aco",       OUTPUT_DIR / "lines_aco.geojson"),
-        ("genetic",   OUTPUT_DIR / "lines_genetic.geojson"),
+        ("naive",     cfg.output_dir / "lines_naive.geojson"),
+        ("iterative", cfg.output_dir / "lines_iterative.geojson"),
+        ("aco",       cfg.output_dir / "lines_aco.geojson"),
+        ("genetic",   cfg.output_dir / "lines_genetic.geojson"),
     ]
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _p:
         _futs = [_p.submit(_annotate_ridership, *v) for v in _ridership_variants]
@@ -890,17 +938,17 @@ def stage_evaluate(
     stage_start = time.perf_counter()
 
     t0 = time.perf_counter()
-    _, positions, _ = _load_network_pickles()
+    _, positions, _ = _load_network_pickles(cfg.pickle_dir)
     log.info("evaluate: network pickles loaded in %.2fs", time.perf_counter() - t0)
 
     t0 = time.perf_counter()
-    df_points = load_geojson(str(DATA_DIR / "complete_points.geojson"))
+    df_points = load_geojson(str(cfg.points_file))
     if df_points.crs is None or df_points.crs.to_epsg() != 3857:
         df_points = df_points.to_crs(epsg=3857)
     log.info("evaluate: points loaded in %.2fs", time.perf_counter() - t0)
 
     blocks_path = DATA_DIR / "complete_region_df.geojson"
-    kde_cache = _kde_cache_path(cfg.eval_kde_bandwidth, cfg.eval_kde_n_samples_per_person)
+    kde_cache = _kde_cache_path(cfg.eval_kde_bandwidth, cfg.eval_kde_n_samples_per_person, cfg.pickle_dir)
     t0 = time.perf_counter()
     popkde = None if force else _load_population_kde_cache(
         kde_cache,
@@ -944,10 +992,10 @@ def stage_evaluate(
     t0 = time.perf_counter()
     variants: dict[str, gpd.GeoDataFrame] = {}
     for name, path in [
-        ("naive", OUTPUT_DIR / "lines_naive.geojson"),
-        ("iterative", OUTPUT_DIR / "lines_iterative.geojson"),
-        ("aco", OUTPUT_DIR / "lines_aco.geojson"),
-        ("genetic", OUTPUT_DIR / "lines_genetic.geojson"),
+        ("naive", cfg.output_dir / "lines_naive.geojson"),
+        ("iterative", cfg.output_dir / "lines_iterative.geojson"),
+        ("aco", cfg.output_dir / "lines_aco.geojson"),
+        ("genetic", cfg.output_dir / "lines_genetic.geojson"),
     ]:
         if path.exists():
             variants[name] = _station_gdf_from_lines(str(path), positions)
@@ -1095,7 +1143,7 @@ def stage_evaluate_extended(
         return format(v, spec)
 
     log.info("evaluate_extended: loading census blocks and network pickles …")
-    _, positions, _ = _load_network_pickles()
+    _, positions, _ = _load_network_pickles(cfg.pickle_dir)
 
     blocks = load_geojson(str(DATA_DIR / "complete_region_df.geojson")).to_crs(epsg=3857)
     if "transit_potential" not in blocks.columns:
@@ -1115,10 +1163,10 @@ def stage_evaluate_extended(
     # Collect per-variant data
     variant_order = ["naive", "iterative", "aco", "genetic", "wmata"]
     variant_paths = {
-        "naive":     OUTPUT_DIR / "lines_naive.geojson",
-        "iterative": OUTPUT_DIR / "lines_iterative.geojson",
-        "aco":       OUTPUT_DIR / "lines_aco.geojson",
-        "genetic":   OUTPUT_DIR / "lines_genetic.geojson",
+        "naive":     cfg.output_dir / "lines_naive.geojson",
+        "iterative": cfg.output_dir / "lines_iterative.geojson",
+        "aco":       cfg.output_dir / "lines_aco.geojson",
+        "genetic":   cfg.output_dir / "lines_genetic.geojson",
     }
 
     station_gdfs: dict[str, gpd.GeoDataFrame] = {}
@@ -1223,7 +1271,7 @@ def stage_evaluate_extended(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: int = 4) -> None:
+def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: int = 4, subway_restaurants: bool = False) -> None:
     for stage in stages:
         if stage not in ALL_STAGES:
             log.error("Unknown stage '%s'. Choose from: %s", stage, ", ".join(ALL_STAGES))
@@ -1249,6 +1297,9 @@ def run_pipeline(stages: list[str], cfg: PipelineConfig, force: bool, workers: i
         "evaluate":          lambda: stage_evaluate(cfg, county_shapes, neighborhoods, force),
         "evaluate_extended": lambda: stage_evaluate_extended(cfg, county_shapes, neighborhoods),
     }
+
+    if subway_restaurants:
+        stage_fns["graph_points"] = lambda: stage_subway_graph_points(cfg, county_shapes, force)
 
     stage_set = set(stages)
     deps: dict[str, set[str]] = {
@@ -1319,8 +1370,26 @@ def main() -> None:
         metavar="N",
         help="Maximum number of pipeline stages to run concurrently (default: 4).",
     )
+    parser.add_argument(
+        "--subway-restaurants",
+        action="store_true",
+        help="Use Subway restaurant locations as graph seed points instead of census block data. "
+             "Outputs go to data/output_subway/ and pickle_subway/.",
+    )
     args = parser.parse_args()
-    run_pipeline(args.stages, PipelineConfig(), args.force, workers=args.workers)
+
+    if args.subway_restaurants:
+        cfg = PipelineConfig(
+            output_dir=DATA_DIR / "output_subway",
+            pickle_dir=PROJECT_ROOT / "pickle_subway",
+            points_file=DATA_DIR / "subway_complete_points.geojson",
+            contract_graph=False,
+            graph_type="delaunay",
+        )
+    else:
+        cfg = PipelineConfig()
+
+    run_pipeline(args.stages, cfg, args.force, workers=args.workers, subway_restaurants=args.subway_restaurants)
 
 
 if __name__ == "__main__":
