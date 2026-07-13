@@ -7,7 +7,7 @@ data/*.npy
 data/*.geojson
 data/*.csv
 data/real_transit/old/*
-data/data_manifest.geojson
+data/data_manifest.json
 venv/*
 .ipynb_checkpoints/*
 __pycache__/*
