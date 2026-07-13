@@ -120,6 +120,15 @@ function statusChipClass(status) {
     return 'muted';
 }
 
+const STATUS_MARKS = { ok: '✓', warn: '▲', alert: '✖' };
+const STATUS_WORDS = { ok: 'normal', warn: 'elevated', alert: 'critical' };
+function chipHtml(statusKey, text) {
+    const cls = statusChipClass(statusKey);
+    const mark = STATUS_MARKS[cls] ? `<span aria-hidden="true">${STATUS_MARKS[cls]}&thinsp;</span>` : '';
+    const word = STATUS_WORDS[cls] ? `<span class="visually-hidden"> — ${STATUS_WORDS[cls]}</span>` : '';
+    return `<span class="chip ${cls}">${mark}${text}${word}</span>`;
+}
+
 function buildOperationalChips(meta) {
     const crowdingClass = meta.occupancyPct !== null && meta.occupancyPct >= 80 ? 'alert' : meta.occupancyPct !== null && meta.occupancyPct >= 60 ? 'warn' : 'ok';
     const delayClass = meta.delayMin !== null && meta.delayMin >= 10 ? 'alert' : meta.delayMin !== null && meta.delayMin >= 5 ? 'warn' : 'ok';
@@ -127,8 +136,8 @@ function buildOperationalChips(meta) {
     const chips = [];
     chips.push(`<span class="chip muted">${escapeHtml(meta.routeKind)}</span>`);
     chips.push(`<span class="chip muted">${escapeHtml(meta.serviceStatus)}</span>`);
-    chips.push(`<span class="chip ${statusChipClass(crowdingClass)}">Crowding ${escapeHtml(formatPercent(meta.occupancyPct))}</span>`);
-    chips.push(`<span class="chip ${statusChipClass(delayClass)}">Delay ${escapeHtml(formatMinutes(meta.delayMin))}</span>`);
+    chips.push(chipHtml(crowdingClass, `Crowding ${escapeHtml(formatPercent(meta.occupancyPct))}`));
+    chips.push(chipHtml(delayClass, `Delay ${escapeHtml(formatMinutes(meta.delayMin))}`));
     chips.push(`<span class="chip ${statusChipClass(accessibilityClass)}">${meta.isAccessible === false ? 'Not accessible' : meta.isAccessible === true ? 'Accessible' : 'Accessibility N/A'}</span>`);
     chips.push(`<span class="chip muted">ROW ${escapeHtml(meta.rowType)}</span>`);
     if (meta.constructionCostMusd !== null) chips.push(`<span class="chip muted">Cost ${escapeHtml(formatDollars(meta.constructionCostMusd))}</span>`);
@@ -141,7 +150,13 @@ function renderTransitOperationsPanel(features) {
     const detailsPanel = document.getElementById('transit-line-details');
     if (!summaryPanel || !detailsPanel) return;
 
-    const lines = (features || []).map(feature => normalizeLineMetadata(feature.properties || {}));
+    const lines = (features || []).map(feature => {
+        const meta = normalizeLineMetadata(feature.properties || {});
+        const names = ((feature.properties || {}).name_list || []).filter(Boolean);
+        meta.stationCount = ((feature.properties || {}).is_station || []).filter(Boolean).length;
+        meta.termini = names.length ? `${names[0]} – ${names[names.length - 1]}` : '';
+        return meta;
+    });
     const crowdingCount = lines.filter(meta => meta.occupancyPct !== null).length;
     const delayCount = lines.filter(meta => meta.delayMin !== null).length;
     const accessibleCount = lines.filter(meta => meta.isAccessible !== null).length;
@@ -165,7 +180,7 @@ function renderTransitOperationsPanel(features) {
         <div class="line-detail-row">
             <div>
                 <div class="line-detail-title">${escapeHtml(meta.name)}</div>
-                <div class="line-detail-meta">${escapeHtml(meta.routeKind)} · ${escapeHtml(meta.serviceStatus)} · ${escapeHtml(meta.rowType)}</div>
+                <div class="line-detail-meta">${escapeHtml(meta.routeKind)} · ${escapeHtml(meta.serviceStatus)} · ${escapeHtml(meta.rowType)}${meta.termini ? ` · ${escapeHtml(meta.termini)}` : ''} · ${meta.stationCount} stations</div>
             </div>
             <div>${buildOperationalChips(meta)}</div>
         </div>
@@ -519,6 +534,7 @@ function loadLinesGeoJSON(source) {
 // Dataset selector: switch between normal network and Subway restaurants network
 const datasetSelect = document.createElement('select');
 datasetSelect.id = 'dataset-select';
+datasetSelect.setAttribute('aria-label', 'Dataset');
 [['output', 'Normal Network'], ['output_subway', 'Subway Restaurants']].forEach(([val, label]) => {
     const opt = document.createElement('option');
     opt.value = val;
@@ -535,6 +551,7 @@ document.getElementById('controls').appendChild(datasetSelect);
 // Add UI for toggling
 const linesSourceSelect = document.createElement('select');
 linesSourceSelect.id = 'lines-source-select';
+linesSourceSelect.setAttribute('aria-label', 'Line-generation algorithm');
 ['lines_iterative', 'lines_genetic', 'lines_naive', 'lines_aco'].forEach(src => {
     const opt = document.createElement('option');
     opt.value = src;
@@ -731,12 +748,17 @@ function renderLayerToggles() {
             col.className = 'layer-toggle-col';
             linesInCol = 0;
         }
-        col.appendChild(groupHeader);
+        const groupWrap = document.createElement('div');
+        groupWrap.setAttribute('role', 'group');
+        groupHeader.id = `layer-group-header-${groupNum}`;
+        groupWrap.setAttribute('aria-labelledby', groupHeader.id);
+        groupWrap.appendChild(groupHeader);
         linesInCol += 1;
         groupLines.forEach(n => {
-            createToggle(n, map.hasLayer(layers[n]), col);
+            createToggle(n, map.hasLayer(layers[n]), groupWrap);
             linesInCol += 1;
         });
+        col.appendChild(groupWrap);
     }
     if (col.childNodes.length > 0) columns.push(col);
     // Add all group columns to the toggles container
@@ -825,6 +847,7 @@ let nodeToLineIds = {};
 
 const routeFinderBtn = document.getElementById('route-finder-btn');
 const routeFinderStatus = document.getElementById('route-finder-status');
+const routeFinderError = document.getElementById('route-finder-error');
 const routeFinderResult = document.getElementById('route-finder-result');
 
 
@@ -848,6 +871,7 @@ routeFinderBtn.onclick = () => {
         routeNodeMarkers.forEach(m => map.removeLayer(m));
         routeNodeMarkers = [];
         routeFinderStatus.textContent = 'Click the starting location.';
+        routeFinderError.textContent = '';
         routeFinderResult.textContent = '';
         routeFinderBtn.textContent = 'clear';
         routeFinderBtn.disabled = true; // Disable clear until origin is selected
@@ -867,6 +891,7 @@ routeFinderBtn.onclick = () => {
     routeNodeMarkers.forEach(m => map.removeLayer(m));
     routeNodeMarkers = [];
     routeFinderStatus.textContent = 'Click the starting location.';
+    routeFinderError.textContent = '';
     routeFinderResult.textContent = '';
     routeFinderBtn.textContent = 'clear';
     routeFinderBtn.disabled = true; // Disable clear until origin is selected
@@ -916,11 +941,13 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
             const m = L.circleMarker([lat, lng], { radius: 12, color: 'red', fillOpacity: 0.7 }).addTo(map);
             routeNodeMarkers.push(m);
             routeFinderStatus.textContent = 'Finding route...';
+            routeFinderError.textContent = '';
             // Only consider visible lines
             const visibleLineIds = new Set(getVisibleLineIds());
             const path = dijkstraLinesVisible(linesGraph, routeStart, routeEnd, visibleLineIds);
             if (path.length < 2) {
-                routeFinderStatus.textContent = 'No route found.';
+                routeFinderStatus.textContent = '';
+                routeFinderError.textContent = 'No route found.';
                 return;
             }
             // Draw route
@@ -1044,6 +1071,9 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                 const stationName = getStationNameByCoord(coord);
                 intermediateStations.push(stationName);
             }
+            // Add show/hide button for intermediate stations
+            let intermediateListId = 'intermediate-stations-list';
+            let showHideBtnId = 'show-hide-intermediate-btn';
             routeFinderResult.innerHTML =
                 `<b>Route:</b> ${walkSummaryStart}${lineSequence.map(l => `Line ${l}`).join(' → ')}${walkDistanceStrEnd}` +
                 `<br><b>Stations:</b> ${stationCount - 2}` +
@@ -1052,11 +1082,8 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                 `<br><b>Estimated travel time:</b> ${travelTimeStr}` +
                 operationsSummary +
                 (walkDistance > 0 ? `<br><b>Total walking distance:</b> ${((clickStartDist + clickEndDist) / 1000).toFixed(2)} km` : '') +
-                (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '');
-            // Add show/hide button for intermediate stations
-            let intermediateListId = 'intermediate-stations-list';
-            let showHideBtnId = 'show-hide-intermediate-btn';
-            routeFinderResult.innerHTML += `<br><button id="${showHideBtnId}">Show intermediate stations</button><div id="${intermediateListId}" style="display:none;"></div>`;
+                (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '') +
+                `<br><button id="${showHideBtnId}">Show intermediate stations</button><div id="${intermediateListId}" style="display:none;"></div>`;
             document.getElementById(showHideBtnId).onclick = function () {
                 const div = document.getElementById(intermediateListId);
                 if (div.style.display === 'none') {
@@ -1086,6 +1113,7 @@ function attachRouteFinderToMarker(marker, lat, lng, stationName) {
                     routeNodeMarkers.forEach(m => map.removeLayer(m));
                     routeNodeMarkers = [];
                     routeFinderStatus.textContent = '';
+                    routeFinderError.textContent = '';
                     routeFinderResult.textContent = '';
                     routeFinderBtn.textContent = 'Route Finder';
                     exitBtn.remove();
@@ -1216,11 +1244,13 @@ map.on('click', function (e) {
         const m = L.circleMarker([nearestCoord[0], nearestCoord[1]], { radius: 12, color: 'red', fillOpacity: 0.7 }).addTo(map);
         routeNodeMarkers.push(m);
         routeFinderStatus.textContent = 'Finding route...';
+        routeFinderError.textContent = '';
         // Only consider visible lines
         const visibleLineIds = new Set(getVisibleLineIds());
         const path = dijkstraLinesVisible(linesGraph, routeStart, routeEnd, visibleLineIds);
         if (path.length < 2) {
-            routeFinderStatus.textContent = 'No route found.';
+            routeFinderStatus.textContent = '';
+            routeFinderError.textContent = 'No route found.';
             return;
         }
         // Draw route
@@ -1351,6 +1381,9 @@ map.on('click', function (e) {
             const stationName = getStationNameByCoord(coord);
             intermediateStations.push(stationName);
         }
+        // Add show/hide button for intermediate stations
+        let intermediateListId = 'intermediate-stations-list';
+        let showHideBtnId = 'show-hide-intermediate-btn';
         routeFinderResult.innerHTML =
             `<b>Route:</b> ${walkSummaryStart}${lineSequence.map(l => `Line ${l}`).join(' → ')}${walkDistanceStrEnd}` +
             `<br><b>Stations:</b> ${stationCount - 2}` +
@@ -1359,11 +1392,8 @@ map.on('click', function (e) {
             `<br><b>Estimated travel time:</b> ${travelTimeStr}` +
             operationsSummary +
             (walkDistance > 0 ? `<br><b>Total walking distance:</b> ${((clickStartDist + clickEndDist) / 1000).toFixed(2)} km` : '') +
-            (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '');
-        // Add show/hide button for intermediate stations
-        let intermediateListId = 'intermediate-stations-list';
-        let showHideBtnId = 'show-hide-intermediate-btn';
-        routeFinderResult.innerHTML += `<br><button id="${showHideBtnId}">Show intermediate stations</button><div id="${intermediateListId}" style="display:none;"></div>`;
+            (walkDistance > 0 ? `<br><b>Total walking time:</b> ${walkTimeStr}` : '') +
+            `<br><button id="${showHideBtnId}">Show intermediate stations</button><div id="${intermediateListId}" style="display:none;"></div>`;
         document.getElementById(showHideBtnId).onclick = function () {
             const div = document.getElementById(intermediateListId);
             if (div.style.display === 'none') {
@@ -1393,6 +1423,7 @@ map.on('click', function (e) {
                 routeNodeMarkers.forEach(m => map.removeLayer(m));
                 routeNodeMarkers = [];
                 routeFinderStatus.textContent = '';
+                routeFinderError.textContent = '';
                 routeFinderResult.textContent = '';
                 routeFinderBtn.textContent = 'Route Finder';
                 exitBtn.remove();

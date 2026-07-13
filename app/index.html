@@ -17,13 +17,14 @@
             <a href="paper.pdf" target="_blank">Click here to read the article!</a>
         </p>
     </div>
-    <div id="map"></div>
+    <div id="map" aria-label="Transit network map"></div>
     <button id="route-finder-btn">Route finder</button>
-    <div id="route-finder-status"></div>
-    <div id="route-finder-result"></div>
+    <div id="route-finder-status" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="route-finder-error" role="alert"></div>
+    <div id="route-finder-result" aria-live="polite"></div>
     <div id="controls">
-        <h3>Toggle Layers</h3>
-        <form id="layer-toggles"></form>
+        <h3 id="layer-toggles-heading">Toggle Layers</h3>
+        <form id="layer-toggles" aria-labelledby="layer-toggles-heading"></form>
     </div>
     <div id="transit-ops-panel" class="panel">
         <div class="panel-header">
