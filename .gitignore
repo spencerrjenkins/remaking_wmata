@@ -1,6 +1,8 @@
-data/dc/*
-data/md/*
-data/va/*
+data/counties/
+data/dc/
+data/md/
+data/neighborhoods/
+data/va/
 data/*.npy
 data/*.geojson
 data/*.csv
