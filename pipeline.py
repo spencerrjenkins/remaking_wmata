@@ -207,7 +207,20 @@ def _load_neighborhoods() -> gpd.GeoDataFrame:
     )[["NAME", "geometry"]]
     dc = dc.to_crs(epsg=3857)
 
-    return pd.concat([arl, md, dc]).reset_index(drop=True)
+    # Covers the VA jurisdictions with no dedicated neighborhood layer of
+    # their own (Alexandria city, Fairfax County, Fairfax city, Falls Church
+    # city, Loudoun County). Arlington is excluded from this statewide Census
+    # Places fetch because "Arlington CDP" covers the whole county as one
+    # blob and would otherwise compete with the finer-grained civic/
+    # neighborhood-level `arl` layer above in the nearest-neighbor lookup.
+    va = load_geojson(
+        str(DATA_DIR / "neighborhoods" /
+            "Virginia_Census_Designated_Areas_-_Census_Designated_Places_2020.geojson")
+    )[["NAME", "geometry"]]
+    va = va.to_crs(epsg=3857)
+    va.geometry = va.geometry.centroid
+
+    return pd.concat([arl, md, dc, va]).reset_index(drop=True)
 
 
 def _load_shapefile_required(path: str) -> gpd.GeoDataFrame:

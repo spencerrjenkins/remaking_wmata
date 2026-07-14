@@ -126,6 +126,7 @@ Included in the repo under `data/neighborhoods/`:
 - `Arlington_Neighborhoods_Program_Areas.geojson`
 - `Maryland_Census_Designated_Areas_-_Census_Designated_Places_2020.geojson`
 - `neighborhood-names-centroid.geojson` (DC)
+- `Virginia_Census_Designated_Areas_-_Census_Designated_Places_2020.geojson` — Census TIGERweb 2020 Incorporated Places + Census Designated Places, fetched from `tigerweb.geo.census.gov` and filtered to Alexandria city, Fairfax County, Fairfax city, Falls Church city, and Loudoun County (Arlington is excluded here since it already has its own finer-grained civic-association layer above)
 
 ### Existing transit network
 
