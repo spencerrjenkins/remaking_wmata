@@ -21,7 +21,7 @@ def find_libpysal_weights():
 
 def get_patched_cardinalities():
     """Return the patched cardinalities property method."""
-    return '''    @property
+    return '''@property
     def cardinalities(self):
         """Number of neighbors for each observation."""
         if "cardinalities" not in self._cache:

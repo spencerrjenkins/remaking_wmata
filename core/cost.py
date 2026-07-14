@@ -232,12 +232,16 @@ def build_line_metadata(
 
     metadata: list[dict] = []
     for lc in line_costs:
+        # All lines here are new-build (route_kind="generated"): the ADA
+        # (1990) requires full accessibility for newly constructed rail
+        # transit stations, so every station is accessible by construction
+        # and the line-level score is 100% — not an unmeasured/unknown value.
         metadata.append({
             "route_kind": "generated",
             "service_status": "planned",
             "occupancy_pct": None,
             "delay_min": None,
-            "accessibility_score": None,
+            "accessibility_score": 100.0,
             "is_accessible": True,
             "row_type": lc.dominant_row_type,
             "construction_cost_musd": round(lc.total_cost_musd, 1),

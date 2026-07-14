@@ -151,7 +151,7 @@ class PipelineConfig:
     num_walks: int = 20
     min_distance: float = 45_000.0
     max_distance: float = 100_000.0
-    iterative_iterations: int = 20
+    iterative_iterations: int = 100
     min_station_dist: float = 1000.0
     naive_group_threshold: float = 0.5
     iterative_group_threshold: float = 0.5
@@ -730,7 +730,7 @@ def stage_aco(
         kde,
         num_routes=cfg.num_walks,
         num_ants=20,
-        generations=1,
+        generations=30,
         min_distance=cfg.min_distance,
         max_distance=cfg.max_distance,
         kde_radius=cfg.kde_radius,
@@ -815,11 +815,13 @@ def stage_cost(cfg: PipelineConfig, force: bool = False) -> None:
             [n for n in (pos_4326_to_node.get(tuple(round(c, 6) for c in node), -1) for node in line) if n != -1]
             for line in lines_loaded
         ]
+        status_by_node = _resolve_coord_keyed_dict(lines_loaded, status, pos_4326_to_node)
+        names_by_node = _resolve_coord_keyed_dict(lines_loaded, names_loaded, pos_4326_to_node)
         segment_row_types = classify_lines_row(valid, positions, osm_network)
-        metadata = build_line_metadata(valid, positions, status, segment_row_types)
+        metadata = build_line_metadata(valid, positions, status_by_node, segment_row_types)
         save_lines_to_geojson(
             valid, graph, positions, kde, str(dst_path),
-            status, groups, names_loaded,
+            status_by_node, groups, names_by_node,
             line_metadata=metadata,
         )
         log.info("cost: %s annotated → %s", variant, dst_path)
@@ -840,6 +842,25 @@ def _to_4326_tuple(xy):
     from pyproj import Transformer
     t = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
     return t.transform(*xy)
+
+
+def _resolve_coord_keyed_dict(lines_loaded, coord_keyed: dict, pos_4326_to_node: dict) -> dict:
+    """
+    Re-key a dict from load_lines_from_geojson (keyed by raw (lon, lat)
+    coordinate tuples) to graph node IDs, via the same rounded-coordinate
+    lookup used to resolve `lines_loaded` into node-ID lines.  Without this,
+    `.get(node_id, ...)` lookups against the coordinate-keyed dict silently
+    miss every entry and fall back to the default for every node.
+    """
+    resolved: dict = {}
+    for line in lines_loaded:
+        for coord in line:
+            if coord not in coord_keyed:
+                continue
+            node_id = pos_4326_to_node.get(tuple(round(c, 6) for c in coord), -1)
+            if node_id != -1:
+                resolved[node_id] = coord_keyed[coord]
+    return resolved
 
 
 def _geojson_has_cost(path: Path) -> bool:
@@ -887,8 +908,9 @@ def stage_ridership(cfg: PipelineConfig, force: bool = False) -> None:
             [n for n in (pos_4326_to_node.get(tuple(round(c, 6) for c in nd), -1) for nd in line) if n != -1]
             for line in lines_loaded
         ]
+        status_by_node = _resolve_coord_keyed_dict(lines_loaded, status, pos_4326_to_node)
         ridership = estimate_line_ridership(
-            valid, positions, status, demand_gdf,
+            valid, positions, status_by_node, demand_gdf,
             catchment_radius_m=800.0,
             daily_total_target=350_000.0,
         )
